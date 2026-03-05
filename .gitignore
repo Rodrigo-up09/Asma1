@@ -1,0 +1,46 @@
+# Python byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambiente virtual (CRUCIAL pro teu .venv)
+.venv/
+venv/
+ENV/
+env/
+
+# Dependências
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Testes e coverage
+.tox/
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# SPADE específico (XMPP, estados)
+spade/
+*.spade
+.tmp/
+logs/
+spade_tmp/
+server.db
+spade_tmp/
+*.db~
+
+# IDEs/Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS gerados
+.DS_Store
+Thumbs.db
+
