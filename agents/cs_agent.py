@@ -9,9 +9,8 @@ from spade.message import Message
 # ──────────────────────────────────────────────
 #  FSM States
 # ──────────────────────────────────────────────
-STATE_AVAILABLE = "AVAILABLE"  # Há portas disponíveis
-STATE_FULL = "FULL"  # Sem portas disponíveis (fila de espera)
-
+STATE_AVAILABLE = "AVAILABLE"  #can charge immediately 
+STATE_FULL = "FULL"            # queue if no doors, wait for inform when done
 
 # ──────────────────────────────────────────────
 #  FSM Behaviour
@@ -25,42 +24,133 @@ class CSChargingFSM(FSMBehaviour):
 
 
 # ──────────────────────────────────────────────
-#  AVAILABLE State (há portas livres)
+#  Helper mixin
 # ──────────────────────────────────────────────
-class AvailableState(State):
-    async def run(self):
-        msg = await self.receive(timeout=5)
+class CSStateMixin:
+    """Shared logic for CS FSM states."""
 
-        if msg and msg.get_metadata("performative") == "request":
-            await self.agent.handle_request(msg)
+    async def _dispatch(self, msg):
+        """Calls _on_<performative>(msg) if the method exists on the state."""
+        if msg is None:
+            return
+        handler = getattr(self, f"_on_{msg.get_metadata('performative')}", None)
+        if handler:
+            await handler(msg)
 
-        # Transição para FULL se não há portas disponíveis
+    def _next_state(self):
+        """Each state overrides this to declare its own transition logic."""
+        raise NotImplementedError
+
+    # ── Shared message handlers ────────────────
+
+    async def _send_response(self, to_jid, status):
+        msg = Message(to=str(to_jid))
+        msg.set_metadata("protocol", "ev-charging")
+        msg.set_metadata("performative", "response")
+        msg.body = json.dumps({"status": status})
+        await self.send(msg)
+        print(f"[CS] → {to_jid}: {status}")
+
+    def _parse_request(self, msg):
+        try:
+            data = json.loads(msg.body)
+            return {
+                "ev_jid": str(msg.sender).split("/")[0],
+                "required_energy": float(data.get("required_energy", 0)),
+                "max_charging_rate": float(data.get("max_charging_rate", self.agent.max_charging_rate)),
+            }
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            return None
+
+    # ── Request outcome helpers ────────────────
+
+    def _can_accept(self, agent, parsed):
+        return agent.used_doors < agent.num_doors and parsed["required_energy"] <= agent.capacity
+
+    async def _accept_ev(self, agent, parsed):
+        ev_jid = parsed["ev_jid"]
+        agent.used_doors += 1
+        agent.capacity -= parsed["required_energy"]
+        agent.active_charging[ev_jid] = {"required_energy": parsed["required_energy"], "rate": parsed["max_charging_rate"]}
+        await self._send_response(ev_jid, "accept")
+        print(f"[CS] ✓ Accepted {ev_jid}: {parsed['required_energy']:.1f} kWh @ {parsed['max_charging_rate']} kW | Doors: {agent.used_doors}/{agent.num_doors}")
+
+    async def _queue_ev(self, agent, parsed):
+        agent.request_queue.append(parsed)
+        await self._send_response(parsed["ev_jid"], "wait")
+        print(f"[CS] ⏳ Queued {parsed['ev_jid']} | Queue size: {len(agent.request_queue)}")
+
+    # ── Performative handlers ──────────────────
+
+    async def _on_request(self, msg):
+        parsed = self._parse_request(msg)
+        if not parsed:
+            return
+        agent = self.agent
+        if self._can_accept(agent, parsed):
+            await self._accept_ev(agent, parsed)
+        else:
+            await self._queue_ev(agent, parsed)
+
+    async def _on_inform(self, msg):
+        agent = self.agent
+        ev_jid = str(msg.sender).split("/")[0]
+        try:
+            status = json.loads(msg.body).get("status")
+        except (json.JSONDecodeError, AttributeError):
+            return
+        if status == "charge-complete" and ev_jid in agent.active_charging:
+            session = agent.active_charging.pop(ev_jid)
+            agent.used_doors = max(0, agent.used_doors - 1)
+            agent.capacity += session["required_energy"]
+            print(f"[CS] 🔓 {ev_jid} done | Doors free: {agent.num_doors - agent.used_doors}/{agent.num_doors}")
+
+    async def _process_queue(self):
+        agent = self.agent
+        processed = []
+        for i, req in enumerate(agent.request_queue):
+            if agent.used_doors >= agent.num_doors:
+                break
+            if req["required_energy"] <= agent.capacity:
+                agent.used_doors += 1
+                agent.capacity -= req["required_energy"]
+                agent.active_charging[req["ev_jid"]] = {"required_energy": req["required_energy"], "rate": req["max_charging_rate"]}
+                await self._send_response(req["ev_jid"], "accept")
+                print(f"[CS] ✓ Accepted (queue) {req['ev_jid']}: {req['required_energy']:.1f} kWh | Doors: {agent.used_doors}/{agent.num_doors}")
+                processed.append(i)
+        for idx in reversed(processed):
+            agent.request_queue.pop(idx)
+
+
+# ──────────────────────────────────────────────
+#  AVAILABLE State
+# ──────────────────────────────────────────────
+class AvailableState(CSStateMixin, State):
+
+    def _next_state(self):
         if self.agent.used_doors >= self.agent.num_doors:
-            self.set_next_state(STATE_FULL)
-            return
+            return STATE_FULL
+        return STATE_AVAILABLE
 
-        self.set_next_state(STATE_AVAILABLE)
-
-
-# ──────────────────────────────────────────────
-#  FULL State (sem portas disponíveis)
-# ──────────────────────────────────────────────
-class FullState(State):
     async def run(self):
-        msg = await self.receive(timeout=1)
+        await self._dispatch(await self.receive(timeout=5))
+        self.set_next_state(self._next_state())
 
-        if msg and msg.get_metadata("performative") == "request":
-            await self.agent.handle_request(msg)
 
-        # Processa a fila
-        await self.agent.process_queue()
+# ──────────────────────────────────────────────
+#  FULL State
+# ──────────────────────────────────────────────
+class FullState(CSStateMixin, State):
 
-        # Se há portas disponíveis, volta a AVAILABLE
+    def _next_state(self):
         if self.agent.used_doors < self.agent.num_doors:
-            self.set_next_state(STATE_AVAILABLE)
-            return
+            return STATE_AVAILABLE
+        return STATE_FULL
 
-        self.set_next_state(STATE_FULL)
+    async def run(self):
+        await self._dispatch(await self.receive(timeout=1))
+        await self._process_queue()
+        self.set_next_state(self._next_state())
 
 
 # ──────────────────────────────────────────────
@@ -72,95 +162,12 @@ class CSAgent(Agent):
 
         config = cs_config or {}
 
-        # Station attributes
         self.max_charging_rate = config.get("max_charging_rate", 22.0)  # kW
         self.num_doors = config.get("num_doors", 4)
         self.capacity = config.get("capacity", 150.0)  # kWh disponíveis na rede
         self.used_doors = 0
-        self.request_queue = []  # Lista de (ev_jid, required_energy, max_charging_rate)
-        self.active_charging = {}  # {ev_jid: (required_energy, started_time)}
-
-    def _parse_request(self, raw_body):
-        """Parse e valida mensagem de request"""
-        if not raw_body:
-            return None
-        try:
-            data = json.loads(raw_body)
-            required_energy = float(data.get("required_energy", 0))
-            max_charging_rate = float(data.get("max_charging_rate", self.max_charging_rate))
-            return {"required_energy": required_energy, "max_charging_rate": max_charging_rate}
-        except (json.JSONDecodeError, ValueError):
-            return None
-
-    async def _send_response(self, to_jid, status):
-        """Envia resposta: 'accept' ou 'wait'"""
-        msg = Message(to=str(to_jid))
-        msg.set_metadata("protocol", "ev-charging")
-        msg.set_metadata("performative", "response")
-        msg.body = json.dumps({"status": status})
-        await self.send(msg)
-        print(f"[CS] → {to_jid}: {status}")
-
-    async def handle_request(self, msg):
-        """Processa pedido do EV"""
-        ev_jid = str(msg.sender).split("/")[0]
-        request_data = self._parse_request(msg.body)
-
-        if not request_data:
-            return
-
-        required_energy = request_data["required_energy"]
-        max_charging_rate = request_data["max_charging_rate"]
-
-        # Verifica se pode aceitar imediatamente (porta disponível + capacidade suficiente)
-        if self.used_doors < self.num_doors and required_energy <= self.capacity:
-            # Aceita o pedido
-            self.used_doors += 1
-            self.capacity -= required_energy
-            self.active_charging[ev_jid] = {
-                "required_energy": required_energy,
-                "rate": max_charging_rate,
-                "started_at": asyncio.get_event_loop().time(),
-            }
-            await self._send_response(ev_jid, "accept")
-            print(f"[CS] ✓ Accepted {ev_jid}: {required_energy} kWh @ {max_charging_rate} kW | Doors: {self.used_doors}/{self.num_doors}")
-        else:
-            # Coloca na fila
-            self.request_queue.append({
-                "ev_jid": ev_jid,
-                "required_energy": required_energy,
-                "max_charging_rate": max_charging_rate,
-            })
-            await self._send_response(ev_jid, "wait")
-            print(f"[CS] ⏳ Queued {ev_jid} | Queue size: {len(self.request_queue)}")
-
-    async def process_queue(self):
-        """Processa a fila e aceita pedidos se recursos disponíveis"""
-        if not self.request_queue:
-            return
-
-        processed = []
-        for i, req in enumerate(self.request_queue):
-            ev_jid = req["ev_jid"]
-            required_energy = req["required_energy"]
-            rate = req["max_charging_rate"]
-
-            # Se há porta e capacidade, aceita
-            if self.used_doors < self.num_doors and required_energy <= self.capacity:
-                self.used_doors += 1
-                self.capacity -= required_energy
-                self.active_charging[ev_jid] = {
-                    "required_energy": required_energy,
-                    "rate": rate,
-                    "started_at": asyncio.get_event_loop().time(),
-                }
-                await self._send_response(ev_jid, "accept")
-                print(f"[CS] ✓ Accepted (from queue) {ev_jid}: {required_energy} kWh | Doors: {self.used_doors}/{self.num_doors}")
-                processed.append(i)
-
-        # Remove processados da fila
-        for idx in reversed(processed):
-            self.request_queue.pop(idx)
+        self.request_queue = []
+        self.active_charging = {}
 
     async def setup(self):
         print(f"[CS Agent] {self.jid} starting...")
@@ -170,20 +177,14 @@ class CSAgent(Agent):
             f"Capacity: {self.capacity} kWh"
         )
 
-        # Build the FSM
         fsm = CSChargingFSM()
-
-        # Register states
         fsm.add_state(name=STATE_AVAILABLE, state=AvailableState(), initial=True)
         fsm.add_state(name=STATE_FULL, state=FullState())
-
-        # Register transitions
         fsm.add_transition(source=STATE_AVAILABLE, dest=STATE_AVAILABLE)
         fsm.add_transition(source=STATE_AVAILABLE, dest=STATE_FULL)
         fsm.add_transition(source=STATE_FULL, dest=STATE_FULL)
         fsm.add_transition(source=STATE_FULL, dest=STATE_AVAILABLE)
 
-        # Adiciona behavior SEM template específico (SPADE FSM tem problemas com Template personalizado)
         self.add_behaviour(fsm)
 
 

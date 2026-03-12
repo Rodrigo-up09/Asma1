@@ -98,8 +98,9 @@ class ChargingState(State):
 
             # Notify CS that charging is complete
             msg = Message(to=agent.cs_jid)
+            msg.set_metadata("protocol", "ev-charging")
             msg.set_metadata("performative", "inform")
-            msg.body = "charge-complete"
+            msg.body = json.dumps({"status": "charge-complete"})
             await self.send(msg)
 
             self.set_next_state(STATE_DRIVING)
