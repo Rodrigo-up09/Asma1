@@ -1,10 +1,12 @@
 import asyncio
+import json
 from datetime import datetime
 
 import spade
 from spade.agent import Agent
 from spade.behaviour import FSMBehaviour, State
 from spade.message import Message
+from spade.template import Template
 
 # ──────────────────────────────────────────────
 #  FSM States
@@ -35,24 +37,39 @@ class GoingToChargerState(State):
 
         print(f"[GOING_TO_CHARGER] 🔌 Requesting charge from {cs_jid}...")
 
+        # Calcula energia necessária
+        required_energy = (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh
+        
         # Send a charge request to the CS agent
         msg = Message(to=cs_jid)
+        msg.set_metadata("protocol", "ev-charging")
         msg.set_metadata("performative", "request")
-        msg.set_metadata("max_charge_rate_kw", agent.max_charge_rate_kw)
-        msg.set_metadata("departure_time", agent.departure_time)
-        msg.set_metadata("required_energy", (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh)
-        msg.body = "request-charge"
+        msg.body = json.dumps({
+            "required_energy": required_energy,
+            "max_charging_rate": agent.max_charge_rate_kw,
+        })
         await self.send(msg)
 
         # Wait for a reply
         reply = await self.receive(timeout=10)
 
-        if reply and reply.body == "accept":
-            print(f"[GOING_TO_CHARGER] ✅ CS accepted! Starting to charge.")
-            self.set_next_state(STATE_CHARGING)
+        if reply:
+            try:
+                response_data = json.loads(reply.body)
+                status = response_data.get("status")
+                if status == "accept":
+                    print(f"[GOING_TO_CHARGER] ✅ CS accepted! Starting to charge.")
+                    self.set_next_state(STATE_CHARGING)
+                else:
+                    print(f"[GOING_TO_CHARGER] ❌ CS responded: {status}. Retrying in 3s...")
+                    await asyncio.sleep(3)
+                    self.set_next_state(STATE_GOING_TO_CHARGER)
+            except json.JSONDecodeError:
+                print(f"[GOING_TO_CHARGER] ❌ Invalid response format. Retrying in 3s...")
+                await asyncio.sleep(3)
+                self.set_next_state(STATE_GOING_TO_CHARGER)
         else:
-            reason = reply.body if reply else "timeout"
-            print(f"[GOING_TO_CHARGER] ❌ CS rejected ({reason}). Retrying in 3s...")
+            print(f"[GOING_TO_CHARGER] ❌ Timeout waiting for CS response. Retrying in 3s...")
             await asyncio.sleep(3)
             self.set_next_state(STATE_GOING_TO_CHARGER)
 
@@ -149,6 +166,11 @@ class EVAgent(Agent):
 
     async def setup(self):
         print(f"[EV Agent] {self.jid} starting...")
+        print(
+            f"[EV Agent] Battery: {self.battery_capacity_kwh} kWh | "
+            f"Current SoC: {self.current_soc:.0%} | "
+            f"Max charge rate: {self.max_charge_rate_kw} kW"
+        )
 
         # Build the FSM
         fsm = EVChargingFSM()
@@ -166,7 +188,10 @@ class EVAgent(Agent):
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_DRIVING)
 
-        self.add_behaviour(fsm)
+        template = Template()
+        template.set_metadata("protocol", "ev-charging")
+
+        self.add_behaviour(fsm, template)
 
 
 # ──────────────────────────────────────────────

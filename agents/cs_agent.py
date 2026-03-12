@@ -5,7 +5,6 @@ import spade
 from spade.agent import Agent
 from spade.behaviour import FSMBehaviour, State
 from spade.message import Message
-from spade.template import Template
 
 # ──────────────────────────────────────────────
 #  FSM States
@@ -184,10 +183,8 @@ class CSAgent(Agent):
         fsm.add_transition(source=STATE_FULL, dest=STATE_FULL)
         fsm.add_transition(source=STATE_FULL, dest=STATE_AVAILABLE)
 
-        template = Template()
-        template.set_metadata("protocol", "ev-charging")
-
-        self.add_behaviour(fsm, template)
+        # Adiciona behavior SEM template específico (SPADE FSM tem problemas com Template personalizado)
+        self.add_behaviour(fsm)
 
 
 # ──────────────────────────────────────────────
