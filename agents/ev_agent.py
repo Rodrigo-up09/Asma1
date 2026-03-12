@@ -38,6 +38,9 @@ class GoingToChargerState(State):
         # Send a charge request to the CS agent
         msg = Message(to=cs_jid)
         msg.set_metadata("performative", "request")
+        msg.set_metadata("max_charge_rate_kw", agent.max_charge_rate_kw)
+        msg.set_metadata("departure_time", agent.departure_time)
+        msg.set_metadata("required_energy", (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh)
         msg.body = "request-charge"
         await self.send(msg)
 
@@ -175,6 +178,8 @@ async def main():
         "password",
         ev_config={
             "battery_capacity_kwh": 60.0,
+            "x":0,
+            "y":0,
             "current_soc": 1.0,
             "required_soc": 0.80,
             "departure_time": "08:00",
