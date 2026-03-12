@@ -4,6 +4,7 @@ from datetime import datetime
 import spade
 from spade.agent import Agent
 from spade.behaviour import FSMBehaviour, State
+from spade.message import Message
 
 # ──────────────────────────────────────────────
 #  FSM States
@@ -29,7 +30,31 @@ class EVChargingFSM(FSMBehaviour):
 # ──────────────────────────────────────────────
 class GoingToChargerState(State):
     async def run(self):
-        pass
+        agent = self.agent
+        cs_jid = agent.cs_jid
+
+        print(f"[GOING_TO_CHARGER] 🔌 Requesting charge from {cs_jid}...")
+
+        # Send a charge request to the CS agent
+        msg = Message(to=cs_jid)
+        msg.set_metadata("performative", "request")
+        msg.set_metadata("max_charge_rate_kw", agent.max_charge_rate_kw)
+        msg.set_metadata("departure_time", agent.departure_time)
+        msg.set_metadata("required_energy", (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh)
+        msg.body = "request-charge"
+        await self.send(msg)
+
+        # Wait for a reply
+        reply = await self.receive(timeout=10)
+
+        if reply and reply.body == "accept":
+            print(f"[GOING_TO_CHARGER] ✅ CS accepted! Starting to charge.")
+            self.set_next_state(STATE_CHARGING)
+        else:
+            reason = reply.body if reply else "timeout"
+            print(f"[GOING_TO_CHARGER] ❌ CS rejected ({reason}). Retrying in 3s...")
+            await asyncio.sleep(3)
+            self.set_next_state(STATE_GOING_TO_CHARGER)
 
 
 # ──────────────────────────────────────────────
@@ -37,7 +62,32 @@ class GoingToChargerState(State):
 # ──────────────────────────────────────────────
 class ChargingState(State):
     async def run(self):
-        pass
+        agent = self.agent
+
+        tick_hours = 0.25
+        energy_added = agent.max_charge_rate_kw * tick_hours
+        soc_gain = energy_added / agent.battery_capacity_kwh
+
+        agent.current_soc = min(1.0, agent.current_soc + soc_gain)
+
+        print(
+            f"[CHARGING] ⚡ SoC: {agent.current_soc:.0%} " f"(+{energy_added:.1f} kWh)"
+        )
+
+        await asyncio.sleep(2)
+
+        if agent.current_soc >= agent.required_soc:
+            print(f"[CHARGING] ✅ Fully charged! Resuming driving.")
+
+            # Notify CS that charging is complete
+            msg = Message(to=agent.cs_jid)
+            msg.set_metadata("performative", "inform")
+            msg.body = "charge-complete"
+            await self.send(msg)
+
+            self.set_next_state(STATE_DRIVING)
+        else:
+            self.set_next_state(STATE_CHARGING)
 
 
 # ──────────────────────────────────────────────
@@ -47,9 +97,9 @@ class DrivingState(State):
     async def run(self):
         agent = self.agent
 
-        tick_hours = 0.25  
+        tick_hours = 0.25
         drain_kw = 7.5
-        energy_used = drain_kw * tick_hours 
+        energy_used = drain_kw * tick_hours
         soc_drop = energy_used / agent.battery_capacity_kwh
 
         agent.current_soc = max(0.0, agent.current_soc - soc_drop)
@@ -89,6 +139,9 @@ class EVAgent(Agent):
         self.max_charge_rate_kw = config.get("max_charge_rate_kw", 22.0)
         self.current_charge_rate_kw = 0.0
 
+        # CS Agent to contact
+        self.cs_jid = config.get("cs_jid", "cs1@localhost")
+
         # Environment (updated via messages from other agents)
         self.electricity_price = config.get("electricity_price", 0.15)
         self.grid_load = config.get("grid_load", 0.5)
@@ -109,7 +162,7 @@ class EVAgent(Agent):
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_DRIVING)
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_GOING_TO_CHARGER)
         fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_CHARGING)
-        fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_DRIVING)
+        fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_GOING_TO_CHARGER)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_DRIVING)
 
@@ -125,10 +178,13 @@ async def main():
         "password",
         ev_config={
             "battery_capacity_kwh": 60.0,
+            "x":0,
+            "y":0,
             "current_soc": 1.0,
             "required_soc": 0.80,
             "departure_time": "08:00",
             "max_charge_rate_kw": 22.0,
+            "cs_jid": "cs1@localhost",
             "electricity_price": 0.15,
             "grid_load": 0.5,
             "renewable_available": False,
