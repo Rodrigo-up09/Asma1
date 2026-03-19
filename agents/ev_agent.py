@@ -21,10 +21,12 @@ STATE_DRIVING = "DRIVING"
 # ──────────────────────────────────────────────
 class EVChargingFSM(FSMBehaviour):
     async def on_start(self):
-        print(f"[FSM] Starting at state: {self.current_state}")
+        name = str(self.agent.jid).split("@")[0]
+        print(f"[{name}][FSM] Starting at state: {self.current_state}")
 
     async def on_end(self):
-        print(f"[FSM] Finished at state: {self.current_state}")
+        name = str(self.agent.jid).split("@")[0]
+        print(f"[{name}][FSM] Finished at state: {self.current_state}")
 
 
 # ──────────────────────────────────────────────
@@ -34,20 +36,25 @@ class GoingToChargerState(State):
     async def run(self):
         agent = self.agent
         cs_jid = agent.cs_jid
+        name = str(agent.jid).split("@")[0]
 
-        print(f"[GOING_TO_CHARGER] 🔌 Requesting charge from {cs_jid}...")
+        print(f"[{name}][GOING_TO_CHARGER] 🔌 Requesting charge from {cs_jid}...")
 
         # Calcula energia necessária
-        required_energy = (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh
-        
+        required_energy = (
+            agent.required_soc - agent.current_soc
+        ) * agent.battery_capacity_kwh
+
         # Send a charge request to the CS agent
         msg = Message(to=cs_jid)
         msg.set_metadata("protocol", "ev-charging")
         msg.set_metadata("performative", "request")
-        msg.body = json.dumps({
-            "required_energy": required_energy,
-            "max_charging_rate": agent.max_charge_rate_kw,
-        })
+        msg.body = json.dumps(
+            {
+                "required_energy": required_energy,
+                "max_charging_rate": agent.max_charge_rate_kw,
+            }
+        )
         await self.send(msg)
 
         # Wait for a reply
@@ -58,18 +65,26 @@ class GoingToChargerState(State):
                 response_data = json.loads(reply.body)
                 status = response_data.get("status")
                 if status == "accept":
-                    print(f"[GOING_TO_CHARGER] ✅ CS accepted! Starting to charge.")
+                    print(
+                        f"[{name}][GOING_TO_CHARGER] ✅ CS accepted! Starting to charge."
+                    )
                     self.set_next_state(STATE_CHARGING)
                 else:
-                    print(f"[GOING_TO_CHARGER] ❌ CS responded: {status}. Retrying in 3s...")
+                    print(
+                        f"[{name}][GOING_TO_CHARGER] ❌ CS responded: {status}. Retrying in 3s..."
+                    )
                     await asyncio.sleep(3)
                     self.set_next_state(STATE_GOING_TO_CHARGER)
             except json.JSONDecodeError:
-                print(f"[GOING_TO_CHARGER] ❌ Invalid response format. Retrying in 3s...")
+                print(
+                    f"[{name}][GOING_TO_CHARGER] ❌ Invalid response format. Retrying in 3s..."
+                )
                 await asyncio.sleep(3)
                 self.set_next_state(STATE_GOING_TO_CHARGER)
         else:
-            print(f"[GOING_TO_CHARGER] ❌ Timeout waiting for CS response. Retrying in 3s...")
+            print(
+                f"[{name}][GOING_TO_CHARGER] ❌ Timeout waiting for CS response. Retrying in 3s..."
+            )
             await asyncio.sleep(3)
             self.set_next_state(STATE_GOING_TO_CHARGER)
 
@@ -80,6 +95,7 @@ class GoingToChargerState(State):
 class ChargingState(State):
     async def run(self):
         agent = self.agent
+        name = str(agent.jid).split("@")[0]
 
         tick_hours = 0.25
         energy_added = agent.max_charge_rate_kw * tick_hours
@@ -88,13 +104,14 @@ class ChargingState(State):
         agent.current_soc = min(1.0, agent.current_soc + soc_gain)
 
         print(
-            f"[CHARGING] ⚡ SoC: {agent.current_soc:.0%} " f"(+{energy_added:.1f} kWh)"
+            f"[{name}][CHARGING] ⚡ SoC: {agent.current_soc:.0%} "
+            f"(+{energy_added:.1f} kWh)"
         )
 
         await asyncio.sleep(2)
 
         if agent.current_soc >= agent.required_soc:
-            print(f"[CHARGING] ✅ Fully charged! Resuming driving.")
+            print(f"[{name}][CHARGING] ✅ Fully charged! Resuming driving.")
 
             # Notify CS that charging is complete
             msg = Message(to=agent.cs_jid)
@@ -114,6 +131,7 @@ class ChargingState(State):
 class DrivingState(State):
     async def run(self):
         agent = self.agent
+        name = str(agent.jid).split("@")[0]
 
         tick_hours = 0.25
         drain_kw = 7.5
@@ -122,13 +140,16 @@ class DrivingState(State):
 
         agent.current_soc = max(0.0, agent.current_soc - soc_drop)
 
-        print(f"[DRIVING] 🚗 SoC: {agent.current_soc:.0%} " f"(-{energy_used:.1f} kWh)")
+        print(
+            f"[{name}][DRIVING] 🚗 SoC: {agent.current_soc:.0%} "
+            f"(-{energy_used:.1f} kWh)"
+        )
 
         await asyncio.sleep(2)
 
         if agent.current_soc <= agent.required_soc:
             print(
-                f"[DRIVING] ⚠ SoC below {agent.required_soc:.0%}, heading to charger..."
+                f"[{name}][DRIVING] ⚠ SoC below {agent.required_soc:.0%}, heading to charger..."
             )
             self.set_next_state(STATE_GOING_TO_CHARGER)
         else:
@@ -204,8 +225,8 @@ async def main():
         "password",
         ev_config={
             "battery_capacity_kwh": 60.0,
-            "x":0,
-            "y":0,
+            "x": 0,
+            "y": 0,
             "current_soc": 1.0,
             "required_soc": 0.80,
             "departure_time": "08:00",
