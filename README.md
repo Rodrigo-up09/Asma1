@@ -59,3 +59,11 @@ This will:
 1. Create a DummyAgent with JID `dummy@localhost`
 2. Start the agent and display "Hello World! I'm agent dummy@localhost"
 3. Run the agent server
+
+
+
+
+
+
+
+
