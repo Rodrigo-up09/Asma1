@@ -2,6 +2,7 @@ import asyncio
 import spade
 from agents.ev_agent import EVAgent
 from agents.cs_agent import CSAgent
+from visualization.visualizer import WorldVisualizer
 
 
 CS_STATIONS = [
@@ -88,10 +89,18 @@ async def main():
     print("   CS2 Agent → http://127.0.0.1:10003  (pos: 20, 10)")
     print("Press Ctrl+C to stop.\n")
 
-    while True:
+    # Launch Pygame visualizer in a background thread
+    viz = WorldVisualizer(
+        ev_agents=[ev1, ev2],
+        cs_agents=[cs1, cs2],
+    )
+    viz_thread = viz.start_in_thread()
+
+    while not viz._stop_event.is_set():
         try:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
         except KeyboardInterrupt:
+            viz.stop()
             break
 
     await ev1.stop()
