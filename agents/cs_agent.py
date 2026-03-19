@@ -9,8 +9,9 @@ from spade.message import Message
 # ──────────────────────────────────────────────
 #  FSM States
 # ──────────────────────────────────────────────
-STATE_AVAILABLE = "AVAILABLE"  #can charge immediately 
-STATE_FULL = "FULL"            # queue if no doors, wait for inform when done
+STATE_AVAILABLE = "AVAILABLE"  # can charge immediately
+STATE_FULL = "FULL"  # queue if no doors, wait for inform when done
+
 
 # ──────────────────────────────────────────────
 #  FSM Behaviour
@@ -57,7 +58,9 @@ class CSStateMixin:
             return {
                 "ev_jid": str(msg.sender).split("/")[0],
                 "required_energy": float(data.get("required_energy", 0)),
-                "max_charging_rate": float(data.get("max_charging_rate", self.agent.max_charging_rate)),
+                "max_charging_rate": float(
+                    data.get("max_charging_rate", self.agent.max_charging_rate)
+                ),
             }
         except (json.JSONDecodeError, ValueError, AttributeError):
             return None
@@ -65,20 +68,30 @@ class CSStateMixin:
     # ── Request outcome helpers ────────────────
 
     def _can_accept(self, agent, parsed):
-        return agent.used_doors < agent.num_doors and parsed["required_energy"] <= agent.capacity
+        return (
+            agent.used_doors < agent.num_doors
+            and parsed["required_energy"] <= agent.capacity
+        )
 
     async def _accept_ev(self, agent, parsed):
         ev_jid = parsed["ev_jid"]
         agent.used_doors += 1
         agent.capacity -= parsed["required_energy"]
-        agent.active_charging[ev_jid] = {"required_energy": parsed["required_energy"], "rate": parsed["max_charging_rate"]}
+        agent.active_charging[ev_jid] = {
+            "required_energy": parsed["required_energy"],
+            "rate": parsed["max_charging_rate"],
+        }
         await self._send_response(ev_jid, "accept")
-        print(f"[CS] ✓ Accepted {ev_jid}: {parsed['required_energy']:.1f} kWh @ {parsed['max_charging_rate']} kW | Doors: {agent.used_doors}/{agent.num_doors}")
+        print(
+            f"[CS] ✓ Accepted {ev_jid}: {parsed['required_energy']:.1f} kWh @ {parsed['max_charging_rate']} kW | Doors: {agent.used_doors}/{agent.num_doors}"
+        )
 
     async def _queue_ev(self, agent, parsed):
         agent.request_queue.append(parsed)
         await self._send_response(parsed["ev_jid"], "wait")
-        print(f"[CS] ⏳ Queued {parsed['ev_jid']} | Queue size: {len(agent.request_queue)}")
+        print(
+            f"[CS] ⏳ Queued {parsed['ev_jid']} | Queue size: {len(agent.request_queue)}"
+        )
 
     # ── Performative handlers ──────────────────
 
@@ -103,7 +116,9 @@ class CSStateMixin:
             session = agent.active_charging.pop(ev_jid)
             agent.used_doors = max(0, agent.used_doors - 1)
             agent.capacity += session["required_energy"]
-            print(f"[CS] 🔓 {ev_jid} done | Doors free: {agent.num_doors - agent.used_doors}/{agent.num_doors}")
+            print(
+                f"[CS] 🔓 {ev_jid} done | Doors free: {agent.num_doors - agent.used_doors}/{agent.num_doors}"
+            )
 
     async def _process_queue(self):
         agent = self.agent
@@ -114,9 +129,14 @@ class CSStateMixin:
             if req["required_energy"] <= agent.capacity:
                 agent.used_doors += 1
                 agent.capacity -= req["required_energy"]
-                agent.active_charging[req["ev_jid"]] = {"required_energy": req["required_energy"], "rate": req["max_charging_rate"]}
+                agent.active_charging[req["ev_jid"]] = {
+                    "required_energy": req["required_energy"],
+                    "rate": req["max_charging_rate"],
+                }
                 await self._send_response(req["ev_jid"], "accept")
-                print(f"[CS] ✓ Accepted (queue) {req['ev_jid']}: {req['required_energy']:.1f} kWh | Doors: {agent.used_doors}/{agent.num_doors}")
+                print(
+                    f"[CS] ✓ Accepted (queue) {req['ev_jid']}: {req['required_energy']:.1f} kWh | Doors: {agent.used_doors}/{agent.num_doors}"
+                )
                 processed.append(i)
         for idx in reversed(processed):
             agent.request_queue.pop(idx)
@@ -169,12 +189,17 @@ class CSAgent(Agent):
         self.request_queue = []
         self.active_charging = {}
 
+        # Position
+        self.x = config.get("x", 0.0)
+        self.y = config.get("y", 0.0)
+
     async def setup(self):
         print(f"[CS Agent] {self.jid} starting...")
         print(
             f"[CS Agent] Doors: {self.num_doors} | "
             f"Max charging rate: {self.max_charging_rate} kW | "
-            f"Capacity: {self.capacity} kWh"
+            f"Capacity: {self.capacity} kWh | "
+            f"Position: ({self.x}, {self.y})"
         )
 
         fsm = CSChargingFSM()

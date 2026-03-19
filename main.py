@@ -4,20 +4,42 @@ from agents.ev_agent import EVAgent
 from agents.cs_agent import CSAgent
 
 
+CS_STATIONS = [
+    {"jid": "cs1@localhost", "x": 0.0, "y": 10.0},
+    {"jid": "cs2@localhost", "x": 20.0, "y": 10.0},
+]
+
+
 async def main():
-    # Start CS Agent first so it is ready to receive messages
-    cs = CSAgent(
+    # Start CS Agent 1
+    cs1 = CSAgent(
         "cs1@localhost",
         "password",
         cs_config={
-            "num_doors": 1,
-            "max_power_kw": 150.0,
+            "num_doors": 4,
+            "capacity": 150.0,
+            "x": 0.0,
+            "y": 10.0,
         },
     )
-    await cs.start()
-    cs.web.start(hostname="127.0.0.1", port=10001)
+    await cs1.start()
+    cs1.web.start(hostname="127.0.0.1", port=10001)
 
-    # Start EV Agent 1
+    # Start CS Agent 2
+    cs2 = CSAgent(
+        "cs2@localhost",
+        "password",
+        cs_config={
+            "num_doors": 2,
+            "capacity": 100.0,
+            "x": 20.0,
+            "y": 10.0,
+        },
+    )
+    await cs2.start()
+    cs2.web.start(hostname="127.0.0.1", port=10003)
+
+    # Start EV Agent 1 — close to cs1
     ev1 = EVAgent(
         "ev1@localhost",
         "password",
@@ -27,7 +49,9 @@ async def main():
             "required_soc": 0.80,
             "departure_time": "08:00",
             "max_charge_rate_kw": 22.0,
-            "cs_jid": "cs1@localhost",
+            "x": 2.0,
+            "y": 5.0,
+            "cs_stations": CS_STATIONS,
             "electricity_price": 0.15,
             "grid_load": 0.5,
             "renewable_available": False,
@@ -36,7 +60,7 @@ async def main():
     await ev1.start()
     ev1.web.start(hostname="127.0.0.1", port=10000)
 
-    # Start EV Agent 2
+    # Start EV Agent 2 — close to cs2
     ev2 = EVAgent(
         "ev2@localhost",
         "password",
@@ -46,7 +70,9 @@ async def main():
             "required_soc": 0.80,
             "departure_time": "09:00",
             "max_charge_rate_kw": 11.0,
-            "cs_jid": "cs1@localhost",
+            "x": 18.0,
+            "y": 8.0,
+            "cs_stations": CS_STATIONS,
             "electricity_price": 0.15,
             "grid_load": 0.5,
             "renewable_available": False,
@@ -56,9 +82,10 @@ async def main():
     ev2.web.start(hostname="127.0.0.1", port=10002)
 
     print("\nAll agents running!")
-    print("   EV1 Agent → http://127.0.0.1:10000")
-    print("   EV2 Agent → http://127.0.0.1:10002")
-    print("   CS  Agent → http://127.0.0.1:10001")
+    print("   EV1 Agent → http://127.0.0.1:10000  (pos: 2, 5)")
+    print("   EV2 Agent → http://127.0.0.1:10002  (pos: 18, 8)")
+    print("   CS1 Agent → http://127.0.0.1:10001  (pos: 0, 10)")
+    print("   CS2 Agent → http://127.0.0.1:10003  (pos: 20, 10)")
     print("Press Ctrl+C to stop.\n")
 
     while True:
@@ -69,7 +96,8 @@ async def main():
 
     await ev1.stop()
     await ev2.stop()
-    await cs.stop()
+    await cs1.stop()
+    await cs2.stop()
 
 
 if __name__ == "__main__":
