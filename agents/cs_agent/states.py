@@ -1,5 +1,7 @@
 from spade.behaviour import FSMBehaviour, State
 
+from .utils import charging_time_minutes
+
 STATE_AVAILABLE = "AVAILABLE"
 STATE_FULL = "FULL"
 
@@ -13,6 +15,35 @@ class CSChargingFSM(FSMBehaviour):
 
 class CSStateMixin:
     """Shared logic for CS FSM states."""
+
+   
+
+    def _estimate_wait_minutes(self, agent, incoming_request):
+        doors = max(1, int(agent.num_doors))
+        door_available_at = [0.0] * doors
+
+        # Seed the schedule with currently active charging sessions.
+        for session in agent.active_charging.values():
+            duration = charging_time_minutes(
+                session.get("required_energy", 0.0),
+                session.get("rate", agent.max_charging_rate),
+                agent.max_charging_rate,
+            )
+            next_door = min(range(doors), key=lambda idx: door_available_at[idx])
+            door_available_at[next_door] += duration
+
+        # Schedule all queued requests in FIFO order.
+        for request in agent.request_queue.snapshot():
+            duration = charging_time_minutes(
+                request.get("required_energy", 0.0),
+                request.get("max_charging_rate", agent.max_charging_rate),
+                agent.max_charging_rate,
+            )
+            next_door = min(range(doors), key=lambda idx: door_available_at[idx])
+            door_available_at[next_door] += duration
+
+        # Predicted wait is when this request can start on the first free door.
+        return min(door_available_at)
 
     async def _dispatch(self, msg):
         if msg is None:
@@ -36,6 +67,9 @@ class CSStateMixin:
 
         ev_jid = parsed["ev_jid"]
 
+        if agent.request_queue.contains_ev(ev_jid):
+            raise ValueError(f"Duplicate queue entry for EV '{ev_jid}'")
+
         # If this EV is already charging, acknowledge and ignore stale retries.
         if ev_jid in agent.active_charging:
             await agent.messaging_service.send_response(self, ev_jid, "accept")
@@ -43,15 +77,17 @@ class CSStateMixin:
             return
 
         if agent.can_accept_request(parsed):
-            agent.request_queue.remove_by_ev(ev_jid)
             await agent.accept_request(parsed, self, from_queue=False)
         else:
-            inserted = agent.request_queue.enqueue_or_update(parsed)
-            await agent.messaging_service.send_response(self, ev_jid, "wait")
-            if inserted:
-                print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
-            else:
-                print(f"[CS] Updated queued request for {ev_jid} | Queue size: {len(agent.request_queue)}")
+            estimated_wait_minutes = self._estimate_wait_minutes(agent, parsed)
+            agent.request_queue.enqueue(parsed)
+            await agent.messaging_service.send_response(
+                self,
+                ev_jid,
+                "wait",
+                extra={"estimated_wait_minutes": round(estimated_wait_minutes, 2)},
+            )
+            print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
 
     async def _on_inform(self, msg):
         agent = self.agent

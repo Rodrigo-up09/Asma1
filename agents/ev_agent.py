@@ -12,6 +12,7 @@ from spade.template import Template
 #  FSM States
 # ──────────────────────────────────────────────
 STATE_GOING_TO_CHARGER = "GOING_TO_CHARGER"
+STATE_WAITING_QUEUE = "WAITING_QUEUE"
 STATE_CHARGING = "CHARGING"
 STATE_DRIVING = "DRIVING"
 
@@ -33,60 +34,92 @@ class EVChargingFSM(FSMBehaviour):
 #  GOING_TO_CHARGER State
 # ──────────────────────────────────────────────
 class GoingToChargerState(State):
-    async def run(self):
-        agent = self.agent
-        cs_jid = agent.cs_jid
-        name = str(agent.jid).split("@")[0]
+    def _required_energy(self, agent):
+        return (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh
 
-        print(f"[{name}][GOING_TO_CHARGER] 🔌 Requesting charge from {cs_jid}...")
-
-        # Calcula energia necessária
-        required_energy = (
-            agent.required_soc - agent.current_soc
-        ) * agent.battery_capacity_kwh
-
-        # Send a charge request to the CS agent
-        msg = Message(to=cs_jid)
+    async def _send_charge_request(self, agent):
+        msg = Message(to=agent.cs_jid)
         msg.set_metadata("protocol", "ev-charging")
         msg.set_metadata("performative", "request")
         msg.body = json.dumps(
             {
-                "required_energy": required_energy,
+                "required_energy": self._required_energy(agent),
                 "max_charging_rate": agent.max_charge_rate_kw,
             }
         )
         await self.send(msg)
 
-        # Wait for a reply
+    async def _handle_response(self, agent, response_data):
+        name = str(agent.jid).split("@")[0]
+        status = response_data.get("status")
+        waitingTime = response_data.get("estimated_wait_minutes")
+
+        if status == "accept":
+            print(f"[{name}][GOING_TO_CHARGER] Accepted by CS. Starting charge.")
+            self.set_next_state(STATE_CHARGING)
+            return
+
+        if status == "wait":
+            print(f"[{name}][GOING_TO_CHARGER] CS is full. Waiting in queue. Estimated wait time: {waitingTime} minutes.")
+            self.set_next_state(STATE_WAITING_QUEUE)
+            return
+
+        print(f"[{name}][GOING_TO_CHARGER] Unexpected response '{status}'. Retrying in 3s...")
+        await asyncio.sleep(3)
+        self.set_next_state(STATE_GOING_TO_CHARGER)
+
+    async def run(self):
+        agent = self.agent
+        name = str(agent.jid).split("@")[0]
+
+        print(f"[{name}][GOING_TO_CHARGER] Requesting charge from {agent.cs_jid}...")
+        await self._send_charge_request(agent)
+
         reply = await self.receive(timeout=10)
 
-        if reply:
-            try:
-                response_data = json.loads(reply.body)
-                status = response_data.get("status")
-                if status == "accept":
-                    print(
-                        f"[{name}][GOING_TO_CHARGER] ✅ CS accepted! Starting to charge."
-                    )
-                    self.set_next_state(STATE_CHARGING)
-                else:
-                    print(
-                        f"[{name}][GOING_TO_CHARGER] ❌ CS responded: {status}. Retrying in 3s..."
-                    )
-                    await asyncio.sleep(3)
-                    self.set_next_state(STATE_GOING_TO_CHARGER)
-            except json.JSONDecodeError:
-                print(
-                    f"[{name}][GOING_TO_CHARGER] ❌ Invalid response format. Retrying in 3s..."
-                )
-                await asyncio.sleep(3)
-                self.set_next_state(STATE_GOING_TO_CHARGER)
-        else:
-            print(
-                f"[{name}][GOING_TO_CHARGER] ❌ Timeout waiting for CS response. Retrying in 3s..."
-            )
+        if not reply:
+            print(f"[{name}][GOING_TO_CHARGER] Timeout waiting CS response. Retrying in 3s...")
             await asyncio.sleep(3)
             self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+
+        try:
+            response_data = json.loads(reply.body)
+        except json.JSONDecodeError:
+            print(f"[{name}][GOING_TO_CHARGER] Invalid response format. Retrying in 3s...")
+            await asyncio.sleep(3)
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+
+        await self._handle_response(agent, response_data)
+
+
+class WaitingQueueState(State):
+    async def run(self):
+        agent = self.agent
+        name = str(agent.jid).split("@")[0]
+
+        reply = await self.receive(timeout=30)
+
+        if not reply:
+            print(f"[{name}][WAITING_QUEUE] Still waiting for CS availability...")
+            self.set_next_state(STATE_WAITING_QUEUE)
+            return
+
+        try:
+            response_data = json.loads(reply.body)
+            status = response_data.get("status")
+        except json.JSONDecodeError:
+            self.set_next_state(STATE_WAITING_QUEUE)
+            return
+
+        if status == "accept":
+            print(f"[{name}][WAITING_QUEUE] Slot available. Starting charge.")
+            self.set_next_state(STATE_CHARGING)
+            return
+
+        print(f"[{name}][WAITING_QUEUE] Received '{status}'. Remaining in queue.")
+        self.set_next_state(STATE_WAITING_QUEUE)
 
 
 # ──────────────────────────────────────────────
@@ -200,13 +233,17 @@ class EVAgent(Agent):
         # Register states
         fsm.add_state(name=STATE_DRIVING, state=DrivingState(), initial=True)
         fsm.add_state(name=STATE_GOING_TO_CHARGER, state=GoingToChargerState())
+        fsm.add_state(name=STATE_WAITING_QUEUE, state=WaitingQueueState())
         fsm.add_state(name=STATE_CHARGING, state=ChargingState())
 
         # Register transitions
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_DRIVING)
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_GOING_TO_CHARGER)
         fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_CHARGING)
+        fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_WAITING_QUEUE)
         fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_GOING_TO_CHARGER)
+        fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_WAITING_QUEUE)
+        fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_DRIVING)
 

@@ -7,11 +7,20 @@ from spade.message import Message
 class CSMessagingService:
     PROTOCOL = "ev-charging"
 
-    async def send_response(self, state: Any, to_jid: str, status: str) -> None:
+    async def send_response(
+        self,
+        state: Any,
+        to_jid: str,
+        status: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         msg = Message(to=str(to_jid))
         msg.set_metadata("protocol", self.PROTOCOL)
         msg.set_metadata("performative", "response")
-        msg.body = json.dumps({"status": status})
+        body = {"status": status}
+        if extra:
+            body.update(extra)
+        msg.body = json.dumps(body)
         await state.send(msg)
         print(f"[CS] -> {to_jid}: {status}")
 

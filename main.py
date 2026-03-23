@@ -1,8 +1,7 @@
 import asyncio
 import spade
-from agents.ev_agent import EVAgent
 from agents.cs_agent.cs_agent import CSAgent
-
+from agents.ev_agent import EVAgent
 
 async def main():
     # Start CS Agent first so it is ready to receive messages

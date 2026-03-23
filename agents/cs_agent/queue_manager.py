@@ -10,32 +10,28 @@ class CSRequestQueue:
     def __init__(self) -> None:
         self._items: List[Dict[str, Any]] = []
 
-    def enqueue_or_update(self, request: Dict[str, Any]) -> bool:
-        """Insert request if EV is not queued, otherwise replace existing request.
+    def enqueue(self, request: Dict[str, Any]) -> None:
+        """Insert request in FIFO queue.
 
-        Returns True when inserted, False when updated.
+        Raises ValueError if the EV is already queued.
         """
         ev_jid = request.get("ev_jid")
 
-        for index, item in enumerate(self._items):
+        for item in self._items:
             if item.get("ev_jid") == ev_jid:
-                self._items[index] = request
-                return False
+                raise ValueError(f"Duplicate queue entry for EV '{ev_jid}'")
 
         self._items.append(request)
-        return True
+
+    def contains_ev(self, ev_jid: str) -> bool:
+        return any(item.get("ev_jid") == ev_jid for item in self._items)
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def remove_by_ev(self, ev_jid: str) -> int:
-        """Remove all queued entries for one EV.
-
-        Returns number of removed entries.
-        """
-        original_size = len(self._items)
-        self._items = [item for item in self._items if item.get("ev_jid") != ev_jid]
-        return original_size - len(self._items)
+    def snapshot(self) -> List[Dict[str, Any]]:
+        """Return a shallow copy of the current queue in FIFO order."""
+        return list(self._items)
 
     async def dispatch_eligible(
         self,
