@@ -1,5 +1,7 @@
 import asyncio
 import json
+import math
+import random
 from datetime import datetime
 
 import spade
@@ -35,10 +37,10 @@ class EVChargingFSM(FSMBehaviour):
 # ──────────────────────────────────────────────
 class GoingToChargerState(State):
     def _required_energy(self, agent):
-        return (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh
+        return max(0.0, (agent.required_soc - agent.current_soc) * agent.battery_capacity_kwh)
 
     async def _send_charge_request(self, agent):
-        msg = Message(to=agent.cs_jid)
+        msg = Message(to=agent.current_cs_jid)
         msg.set_metadata("protocol", "ev-charging")
         msg.set_metadata("performative", "request")
         msg.body = json.dumps(
@@ -72,7 +74,35 @@ class GoingToChargerState(State):
         agent = self.agent
         name = str(agent.jid).split("@")[0]
 
-        print(f"[{name}][GOING_TO_CHARGER] Requesting charge from {agent.cs_jid}...")
+        if not agent.current_cs_jid:
+            closest_jid, dist = agent._closest_cs()
+            if not closest_jid:
+                print(f"[{name}][GOING_TO_CHARGER] No charging stations configured. Retrying in 3s...")
+                await asyncio.sleep(3)
+                self.set_next_state(STATE_GOING_TO_CHARGER)
+                return
+            agent.current_cs_jid = closest_jid
+            print(f"[{name}][GOING_TO_CHARGER] Chose {closest_jid} (dist={dist:.1f})")
+
+        cs_pos = agent._get_cs_position(agent.current_cs_jid)
+        dist = math.hypot(cs_pos["x"] - agent.x, cs_pos["y"] - agent.y)
+
+        if dist > 1.0:
+            dx = cs_pos["x"] - agent.x
+            dy = cs_pos["y"] - agent.y
+            step = min(agent.velocity, dist)
+            agent.x += (dx / dist) * step
+            agent.y += (dy / dist) * step
+            new_dist = math.hypot(cs_pos["x"] - agent.x, cs_pos["y"] - agent.y)
+            print(
+                f"[{name}][GOING_TO_CHARGER] Moving to {agent.current_cs_jid} | "
+                f"pos=({agent.x:.1f}, {agent.y:.1f}) | dist={new_dist:.1f}"
+            )
+            await asyncio.sleep(2)
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+
+        print(f"[{name}][GOING_TO_CHARGER] Arrived at {agent.current_cs_jid}. Requesting charge...")
         await self._send_charge_request(agent)
 
         reply = await self.receive(timeout=10)
@@ -147,7 +177,7 @@ class ChargingState(State):
             print(f"[{name}][CHARGING] ✅ Fully charged! Resuming driving.")
 
             # Notify CS that charging is complete
-            msg = Message(to=agent.cs_jid)
+            msg = Message(to=agent.current_cs_jid)
             msg.set_metadata("protocol", "ev-charging")
             msg.set_metadata("performative", "inform")
             msg.body = json.dumps({"status": "charge-complete"})
@@ -166,6 +196,11 @@ class DrivingState(State):
         agent = self.agent
         name = str(agent.jid).split("@")[0]
 
+        # Move in a random direction
+        angle = random.uniform(0, 2 * math.pi)
+        agent.x += agent.velocity * math.cos(angle)
+        agent.y += agent.velocity * math.sin(angle)
+
         tick_hours = 0.25
         drain_kw = 7.5
         energy_used = drain_kw * tick_hours
@@ -175,12 +210,13 @@ class DrivingState(State):
 
         print(
             f"[{name}][DRIVING] 🚗 SoC: {agent.current_soc:.0%} "
-            f"(-{energy_used:.1f} kWh)"
+            f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
         )
 
         await asyncio.sleep(2)
 
         if agent.current_soc <= agent.required_soc:
+            agent.current_cs_jid = None  # reset so GOING_TO_CHARGER picks fresh
             print(
                 f"[{name}][DRIVING] ⚠ SoC below {agent.required_soc:.0%}, heading to charger..."
             )
@@ -211,20 +247,45 @@ class EVAgent(Agent):
         self.max_charge_rate_kw = config.get("max_charge_rate_kw", 22.0)
         self.current_charge_rate_kw = 0.0
 
-        # CS Agent to contact
-        self.cs_jid = config.get("cs_jid", "cs1@localhost")
+        # Position & movement
+        self.x = config.get("x", 0.0)
+        self.y = config.get("y", 0.0)
+        self.velocity = config.get("velocity", 5.0)  # units per tick
+
+        # Known CS stations: list of {"jid": ..., "x": ..., "y": ...}
+        self.cs_stations = config.get("cs_stations", [])
+        self.current_cs_jid = None  # set when choosing a CS
 
         # Environment (updated via messages from other agents)
         self.electricity_price = config.get("electricity_price", 0.15)
         self.grid_load = config.get("grid_load", 0.5)
         self.renewable_available = config.get("renewable_available", False)
 
+    def _closest_cs(self):
+        """Return (jid, distance) of the closest charging station."""
+        best_jid = None
+        best_dist = float("inf")
+        for cs in self.cs_stations:
+            d = math.hypot(cs["x"] - self.x, cs["y"] - self.y)
+            if d < best_dist:
+                best_dist = d
+                best_jid = cs["jid"]
+        return best_jid, best_dist
+
+    def _get_cs_position(self, cs_jid):
+        """Return {x, y} for the given CS JID."""
+        for cs in self.cs_stations:
+            if cs["jid"] == cs_jid:
+                return cs
+        return {"x": 0.0, "y": 0.0}
+
     async def setup(self):
         print(f"[EV Agent] {self.jid} starting...")
         print(
             f"[EV Agent] Battery: {self.battery_capacity_kwh} kWh | "
             f"Current SoC: {self.current_soc:.0%} | "
-            f"Max charge rate: {self.max_charge_rate_kw} kW"
+            f"Max charge rate: {self.max_charge_rate_kw} kW | "
+            f"Position: ({self.x}, {self.y})"
         )
 
         # Build the FSM

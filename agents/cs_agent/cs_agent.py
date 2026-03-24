@@ -19,7 +19,9 @@ class CSAgent(Agent):
 
         self.max_charging_rate = config.get("max_charging_rate", config.get("max_power_kw", 22.0))
         self.num_doors = config.get("num_doors", 4)
-        self.capacity = config.get("capacity", 150.0)  
+        self.capacity = config.get("capacity", 150.0)
+        self.x = config.get("x", 0.0)
+        self.y = config.get("y", 0.0)
         self.used_doors = 0
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
