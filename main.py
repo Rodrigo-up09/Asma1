@@ -108,8 +108,8 @@ async def main():
             cs_data["jid"],
             cs_data["password"],
             cs_config=cs_data["config"],
+            world_clock=world_clock,
         )
-        cs_agent.world_clock = world_clock
         await cs_agent.start()
         cs_agent.web.start(hostname="127.0.0.1", port=cs_data["web_port"])
         active_cs_agents.append(cs_agent)
@@ -122,8 +122,8 @@ async def main():
             ev_data["jid"],
             ev_data["password"],
             ev_config=ev_data["config"],
+            world_clock=world_clock,
         )
-        ev_agent.world_clock = world_clock
         await ev_agent.start()
         ev_agent.web.start(hostname="127.0.0.1", port=ev_data["web_port"])
         active_ev_agents.append(ev_agent)

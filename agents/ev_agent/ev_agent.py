@@ -1,5 +1,8 @@
+from typing import Optional
+
 from spade.agent import Agent
 from spade.template import Template
+from world_clock import WorldClock
 
 from .messaging import EVMessagingService
 from .states import (
@@ -17,7 +20,15 @@ from .utils import closest_station, get_station_position
 
 
 class EVAgent(Agent):
-    def __init__(self, jid, password, ev_config=None, *args, **kwargs):
+    def __init__(
+        self,
+        jid,
+        password,
+        ev_config=None,
+        world_clock: Optional[WorldClock] = None,
+        *args,
+        **kwargs,
+    ):
         super().__init__(jid, password, *args, **kwargs)
 
         config = ev_config or {}
@@ -45,6 +56,7 @@ class EVAgent(Agent):
         self.renewable_available = config.get("renewable_available", False)
 
         self.messaging_service = EVMessagingService()
+        self.world_clock = world_clock
 
     def _closest_cs(self):
         return closest_station(self.x, self.y, self.cs_stations)

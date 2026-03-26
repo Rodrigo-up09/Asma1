@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 import spade
 from spade.agent import Agent
@@ -6,13 +7,22 @@ from spade.agent import Agent
 from .messaging import CSMessagingService
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
+from world_clock import WorldClock
 
 
 # ──────────────────────────────────────────────
 #  Charging Station Agent
 # ──────────────────────────────────────────────
 class CSAgent(Agent):
-    def __init__(self, jid, password, cs_config=None, *args, **kwargs):
+    def __init__(
+        self,
+        jid,
+        password,
+        cs_config=None,
+        world_clock: Optional[WorldClock] = None,
+        *args,
+        **kwargs,
+    ):
         super().__init__(jid, password, *args, **kwargs)
 
         config = cs_config or {}
@@ -26,6 +36,7 @@ class CSAgent(Agent):
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.messaging_service = CSMessagingService()
+        self.world_clock = world_clock
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
