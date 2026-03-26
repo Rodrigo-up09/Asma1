@@ -66,6 +66,10 @@ def build_ev_deployment(cs_stations):
                 "electricity_price": 0.15,
                 "grid_load": 0.5,
                 "renewable_available": False,
+                "schedule": [
+                    {"name": "Work", "x": 15.0, "y": 20.0, "hour": 9.0},
+                    {"name": "Home", "x": -10.0, "y": -5.0, "hour": 18.0},
+                ],
             },
         },
         {
@@ -86,6 +90,10 @@ def build_ev_deployment(cs_stations):
                 "electricity_price": 0.15,
                 "grid_load": 0.5,
                 "renewable_available": False,
+                "schedule": [
+                    {"name": "Office", "x": -15.0, "y": 15.0, "hour": 8.0},
+                    {"name": "Home", "x": 10.0, "y": -10.0, "hour": 17.0},
+                ],
             },
         },
     ]

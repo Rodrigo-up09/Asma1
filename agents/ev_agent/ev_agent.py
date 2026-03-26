@@ -44,7 +44,34 @@ class EVAgent(Agent):
         self.grid_load = config.get("grid_load", 0.5)
         self.renewable_available = config.get("renewable_available", False)
 
+        # Schedule: list of {"name": str, "x": float, "y": float, "hour": float}
+        self.schedule = sorted(
+            config.get("schedule", []),
+            key=lambda s: s["hour"],
+        )
+        self.current_target_index = 0
+
         self.messaging_service = EVMessagingService()
+
+    def next_target(self):
+        """Return the next scheduled destination based on world clock time."""
+        if not self.schedule:
+            return None
+
+        clock = getattr(self, "world_clock", None)
+        if not clock:
+            return self.schedule[self.current_target_index]
+
+        now = clock.time_of_day
+        # Find the next stop whose hour hasn't passed yet today
+        for i, stop in enumerate(self.schedule):
+            if stop["hour"] > now:
+                self.current_target_index = i
+                return stop
+
+        # All stops passed for today → wrap to first stop (tomorrow)
+        self.current_target_index = 0
+        return self.schedule[0]
 
     def _closest_cs(self):
         return closest_station(self.x, self.y, self.cs_stations)

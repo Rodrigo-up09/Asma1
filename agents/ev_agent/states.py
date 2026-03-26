@@ -215,9 +215,32 @@ class DrivingState(State):
             else "??:??"
         )
 
-        angle = random.uniform(0, 2 * math.pi)
-        agent.x += agent.velocity * math.cos(angle)
-        agent.y += agent.velocity * math.sin(angle)
+        target = agent.next_target() if hasattr(agent, "next_target") else None
+
+        if target:
+            dist = math.hypot(target["x"] - agent.x, target["y"] - agent.y)
+
+            if dist > 1.0:
+                agent.x, agent.y, remaining = move_towards(
+                    agent.x,
+                    agent.y,
+                    target["x"],
+                    target["y"],
+                    agent.velocity,
+                )
+            else:
+                # Arrived at target
+                print(
+                    f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
+                    f"pos=({agent.x:.1f}, {agent.y:.1f})"
+                )
+                remaining = 0.0
+        else:
+            # No schedule — random walk fallback
+            angle = random.uniform(0, 2 * math.pi)
+            agent.x += agent.velocity * math.cos(angle)
+            agent.y += agent.velocity * math.sin(angle)
+            remaining = None
 
         drain_kw = 7.5
         energy_used = drain_kw * TICK_SIM_HOURS
@@ -225,10 +248,16 @@ class DrivingState(State):
 
         agent.current_soc = max(0.0, agent.current_soc - soc_drop)
 
-        print(
-            f"[{t}][{name}][DRIVING] SoC: {agent.current_soc:.0%} "
-            f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
-        )
+        if target and remaining is not None and remaining > 1.0:
+            print(
+                f"[{t}][{name}][DRIVING] → \"{target['name']}\" | SoC: {agent.current_soc:.0%} "
+                f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f}) | dist={remaining:.1f}"
+            )
+        else:
+            print(
+                f"[{t}][{name}][DRIVING] SoC: {agent.current_soc:.0%} "
+                f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
+            )
 
         await asyncio.sleep(TICK_SLEEP_SECONDS)
 

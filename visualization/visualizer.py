@@ -31,6 +31,13 @@ SOC_LOW = (231, 76, 60)  # red
 
 LINE_COLOUR = (243, 156, 18, 120)  # semi-transparent orange
 
+TARGET_COLOURS = [
+    (100, 180, 255),  # light blue
+    (255, 150, 200),  # pink
+    (180, 255, 150),  # light green
+    (255, 200, 100),  # light orange
+]
+
 
 def _soc_colour(soc: float):
     """Interpolate green→red based on SoC (1.0 = green, 0.0 = red)."""
@@ -139,6 +146,13 @@ class WorldVisualizer:
             target_sx, target_sy = self.world_to_screen(cs_pos["x"], cs_pos["y"])
             pygame.draw.line(surface, EV_GOING, (sx, sy), (target_sx, target_sy), 2)
 
+        # Draw line to scheduled target if driving
+        if state == "DRIVING" and hasattr(ev, "next_target"):
+            target = ev.next_target()
+            if target:
+                tx, ty = self.world_to_screen(target["x"], target["y"])
+                pygame.draw.line(surface, EV_DRIVING, (sx, sy), (tx, ty), 1)
+
         # Car circle
         radius = 14
         pygame.draw.circle(surface, colour, (sx, sy), radius)
@@ -208,8 +222,27 @@ class WorldVisualizer:
             for cs in self.cs_agents:
                 self._draw_cs(screen, font, cs)
 
-            for ev in self.ev_agents:
+            for i, ev in enumerate(self.ev_agents):
                 self._draw_ev(screen, font, ev)
+
+            # Draw target markers for each EV
+            for i, ev in enumerate(self.ev_agents):
+                if hasattr(ev, "schedule") and ev.schedule:
+                    colour = TARGET_COLOURS[i % len(TARGET_COLOURS)]
+                    ev_name = str(ev.jid).split("@")[0]
+                    for stop in ev.schedule:
+                        tx, ty = self.world_to_screen(stop["x"], stop["y"])
+                        # Diamond marker
+                        diamond = [
+                            (tx, ty - 7),
+                            (tx + 5, ty),
+                            (tx, ty + 7),
+                            (tx - 5, ty),
+                        ]
+                        pygame.draw.polygon(screen, colour, diamond)
+                        pygame.draw.polygon(screen, WHITE, diamond, 1)
+                        label = font.render(f"{stop['name']} ({ev_name})", True, colour)
+                        screen.blit(label, (tx + 8, ty - 7))
 
             self._draw_legend(screen, font)
 
