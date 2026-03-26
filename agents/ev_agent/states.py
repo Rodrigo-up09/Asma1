@@ -4,7 +4,12 @@ import random
 
 from spade.behaviour import FSMBehaviour, State
 
-from .utils import closest_station, get_station_position, move_towards, required_energy_kwh
+from .utils import (
+    closest_station,
+    get_station_position,
+    move_towards,
+    required_energy_kwh,
+)
 
 STATE_GOING_TO_CHARGER = "GOING_TO_CHARGER"
 STATE_WAITING_QUEUE = "WAITING_QUEUE"
@@ -30,7 +35,9 @@ class GoingToChargerState(State):
         if not agent.current_cs_jid:
             closest_jid, dist = closest_station(agent.x, agent.y, agent.cs_stations)
             if not closest_jid:
-                print(f"[{name}][GOING_TO_CHARGER] No charging stations configured. Retrying in 3s...")
+                print(
+                    f"[{name}][GOING_TO_CHARGER] No charging stations configured. Retrying in 3s..."
+                )
                 await asyncio.sleep(3)
                 self.set_next_state(STATE_GOING_TO_CHARGER)
                 return
@@ -48,15 +55,25 @@ class GoingToChargerState(State):
                 cs_pos["y"],
                 agent.velocity,
             )
+
+            tick_hours = 0.25
+            drain_kw = 7.5
+            energy_used = drain_kw * tick_hours
+            soc_drop = energy_used / agent.battery_capacity_kwh
+            agent.current_soc = max(0.0, agent.current_soc - soc_drop)
+
             print(
                 f"[{name}][GOING_TO_CHARGER] Moving to {agent.current_cs_jid} | "
+                f"SoC: {agent.current_soc:.0%} (-{energy_used:.1f} kWh) | "
                 f"pos=({agent.x:.1f}, {agent.y:.1f}) | dist={new_dist:.1f}"
             )
             await asyncio.sleep(2)
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
 
-        print(f"[{name}][GOING_TO_CHARGER] Arrived at {agent.current_cs_jid}. Requesting charge...")
+        print(
+            f"[{name}][GOING_TO_CHARGER] Arrived at {agent.current_cs_jid}. Requesting charge..."
+        )
         await agent.messaging_service.send_charge_request(
             self,
             to_jid=agent.current_cs_jid,
@@ -71,14 +88,18 @@ class GoingToChargerState(State):
         reply = await self.receive(timeout=10)
 
         if not reply:
-            print(f"[{name}][GOING_TO_CHARGER] Timeout waiting CS response. Retrying in 3s...")
+            print(
+                f"[{name}][GOING_TO_CHARGER] Timeout waiting CS response. Retrying in 3s..."
+            )
             await asyncio.sleep(3)
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
 
         response_data = agent.messaging_service.parse_response(reply)
         if response_data is None:
-            print(f"[{name}][GOING_TO_CHARGER] Invalid response format. Retrying in 3s...")
+            print(
+                f"[{name}][GOING_TO_CHARGER] Invalid response format. Retrying in 3s..."
+            )
             await asyncio.sleep(3)
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
@@ -99,7 +120,9 @@ class GoingToChargerState(State):
             self.set_next_state(STATE_WAITING_QUEUE)
             return
 
-        print(f"[{name}][GOING_TO_CHARGER] Unexpected response '{status}'. Retrying in 3s...")
+        print(
+            f"[{name}][GOING_TO_CHARGER] Unexpected response '{status}'. Retrying in 3s..."
+        )
         await asyncio.sleep(3)
         self.set_next_state(STATE_GOING_TO_CHARGER)
 
