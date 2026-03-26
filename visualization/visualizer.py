@@ -43,9 +43,19 @@ def _soc_colour(soc: float):
 class WorldVisualizer:
     """Real-time Pygame visualisation of the EV charging world."""
 
-    def __init__(self, ev_agents, cs_agents, width=900, height=700, scale=18.0, fps=30):
+    def __init__(
+        self,
+        ev_agents,
+        cs_agents,
+        world_clock=None,
+        width=900,
+        height=700,
+        scale=18.0,
+        fps=30,
+    ):
         self.ev_agents = ev_agents
         self.cs_agents = cs_agents
+        self.world_clock = world_clock
         self.width = width
         self.height = height
         self.scale = scale
@@ -206,6 +216,18 @@ class WorldVisualizer:
             # Title
             title = font.render("EV Charging Simulation", True, TEXT_COLOUR)
             screen.blit(title, (10, 8))
+
+            # World clock display
+            if self.world_clock:
+                try:
+                    time_font = pygame.font.SysFont("dejavusans", 20, bold=True)
+                except Exception:
+                    time_font = pygame.font.Font(None, 24)
+                time_str = self.world_clock.formatted_day_time()
+                time_surface = time_font.render(time_str, True, (255, 220, 100))
+                screen.blit(
+                    time_surface, (self.width - time_surface.get_width() - 14, 8)
+                )
 
             pygame.display.flip()
             clock.tick(self.fps)

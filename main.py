@@ -3,6 +3,7 @@ import spade
 from agents.cs_agent.cs_agent import CSAgent
 from agents.ev_agent import EVAgent
 from visualization.visualizer import WorldVisualizer
+from world_clock import WorldClock
 
 
 CS_DEPLOYMENT = [
@@ -55,7 +56,8 @@ def build_ev_deployment(cs_stations):
             "config": {
                 "battery_capacity_kwh": 60.0,
                 "current_soc": 1.0,
-                "required_soc": 0.80,
+                "low_soc_threshold": 0.20,
+                "target_soc": 0.80,
                 "departure_time": "08:00",
                 "max_charge_rate_kw": 22.0,
                 "x": 2.0,
@@ -74,7 +76,8 @@ def build_ev_deployment(cs_stations):
             "config": {
                 "battery_capacity_kwh": 40.0,
                 "current_soc": 0.30,
-                "required_soc": 0.80,
+                "low_soc_threshold": 0.20,
+                "target_soc": 0.80,
                 "departure_time": "09:00",
                 "max_charge_rate_kw": 11.0,
                 "x": 18.0,
@@ -89,6 +92,8 @@ def build_ev_deployment(cs_stations):
 
 
 async def main():
+    world_clock = WorldClock(real_seconds_per_hour=3.0, start_hour=7.0)
+
     cs_stations = build_active_cs_stations(CS_DEPLOYMENT)
     ev_deployment = build_ev_deployment(cs_stations)
 
@@ -104,6 +109,7 @@ async def main():
             cs_data["password"],
             cs_config=cs_data["config"],
         )
+        cs_agent.world_clock = world_clock
         await cs_agent.start()
         cs_agent.web.start(hostname="127.0.0.1", port=cs_data["web_port"])
         active_cs_agents.append(cs_agent)
@@ -117,6 +123,7 @@ async def main():
             ev_data["password"],
             ev_config=ev_data["config"],
         )
+        ev_agent.world_clock = world_clock
         await ev_agent.start()
         ev_agent.web.start(hostname="127.0.0.1", port=ev_data["web_port"])
         active_ev_agents.append(ev_agent)
@@ -142,6 +149,7 @@ async def main():
     viz = WorldVisualizer(
         ev_agents=active_ev_agents,
         cs_agents=active_cs_agents,
+        world_clock=world_clock,
     )
     viz.start_in_thread()
 
@@ -157,7 +165,6 @@ async def main():
 
     for cs_agent in active_cs_agents:
         await cs_agent.stop()
-
 
 
 if __name__ == "__main__":

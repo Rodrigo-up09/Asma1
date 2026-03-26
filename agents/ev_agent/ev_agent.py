@@ -24,7 +24,8 @@ class EVAgent(Agent):
 
         self.battery_capacity_kwh = config.get("battery_capacity_kwh", 60.0)
         self.current_soc = config.get("current_soc", 0.20)
-        self.required_soc = config.get("required_soc", 0.80)
+        self.low_soc_threshold = config.get("low_soc_threshold", 0.20)
+        self.target_soc = config.get("target_soc", 0.80)
 
         self.departure_time = config.get("departure_time", "08:00")
         self.arrival_time = config.get("arrival_time", "22:00")
@@ -34,7 +35,7 @@ class EVAgent(Agent):
 
         self.x = config.get("x", 0.0)
         self.y = config.get("y", 0.0)
-        self.velocity = config.get("velocity", 5.0)
+        self.velocity = config.get("velocity", 1.0)
 
         self.cs_stations = config.get("cs_stations", [])
         self.current_cs_jid = None
