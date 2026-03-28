@@ -15,6 +15,7 @@ STATE_GOING_TO_CHARGER = "GOING_TO_CHARGER"
 STATE_WAITING_QUEUE = "WAITING_QUEUE"
 STATE_CHARGING = "CHARGING"
 STATE_DRIVING = "DRIVING"
+STATE_STOPPED = "STOPPED"
 
 # ── Tick timing ────────────────────────────────
 TICK_SLEEP_SECONDS = 0.5  # real-time delay between ticks
@@ -67,7 +68,7 @@ class GoingToChargerState(State):
                 agent.velocity,
             )
 
-            drain_kw = 7.5
+            drain_kw = agent.energy_per_km * agent.velocity
             tick_hours = TICK_SIM_HOURS
             energy_used = drain_kw * tick_hours
             soc_drop = energy_used / agent.battery_capacity_kwh
@@ -205,6 +206,81 @@ class ChargingState(State):
         self.set_next_state(STATE_CHARGING)
 
 
+class StoppedState(State):
+    async def run(self):
+        agent = self.agent
+        name = str(agent.jid).split("@")[0]
+        t = (
+            agent.world_clock.formatted_time()
+            if hasattr(agent, "world_clock") and agent.world_clock
+            else "??:??"
+        )
+
+        # Current stop the EV is parked at
+        current_stop = None
+        if agent.schedule and 0 <= agent.current_target_index < len(agent.schedule):
+            current_stop = agent.schedule[agent.current_target_index]
+
+        # Next stop is the one after the current target index
+        next_idx = (
+            (agent.current_target_index + 1) % len(agent.schedule)
+            if agent.schedule
+            else 0
+        )
+        next_stop = agent.schedule[next_idx] if agent.schedule else None
+
+        if next_stop:
+            dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
+            travel_hours = dist / agent.velocity if agent.velocity > 0 else float("inf")
+
+            clock = getattr(agent, "world_clock", None)
+            now = clock.time_of_day if clock else 0.0
+
+            target_hour = next_stop["hour"]
+            # Time remaining until the next stop's scheduled hour
+            if target_hour > now:
+                time_remaining = target_hour - now
+            else:
+                # Next stop is tomorrow (day wrap)
+                time_remaining = (24.0 - now) + target_hour
+
+            location_name = current_stop["name"] if current_stop else "unknown"
+
+            if time_remaining <= travel_hours:
+                # Time to leave — advance target index so next_target() returns the next stop
+                agent.current_target_index = next_idx
+                print(
+                    f"[{t}][{name}][STOPPED] Leaving \"{location_name}\" → \"{next_stop['name']}\" "
+                    f"(travel ≈ {travel_hours:.1f}h, remaining {time_remaining:.1f}h)"
+                )
+                self.set_next_state(STATE_DRIVING)
+                await asyncio.sleep(TICK_SLEEP_SECONDS)
+                return
+
+            time_until_leave = time_remaining - travel_hours
+            print(
+                f'[{t}][{name}][STOPPED] Parked at "{location_name}" | '
+                f"SoC: {agent.current_soc:.0%} | leaving in ~{time_until_leave:.1f}h"
+            )
+        else:
+            print(
+                f"[{t}][{name}][STOPPED] Parked (no schedule) | SoC: {agent.current_soc:.0%}"
+            )
+
+        await asyncio.sleep(TICK_SLEEP_SECONDS)
+
+        # Check low SoC while parked
+        if agent.current_soc <= agent.low_soc_threshold:
+            agent.current_cs_jid = None
+            print(
+                f"[{t}][{name}][STOPPED] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
+            )
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+
+        self.set_next_state(STATE_STOPPED)
+
+
 class DrivingState(State):
     async def run(self):
         agent = self.agent
@@ -229,12 +305,13 @@ class DrivingState(State):
                     agent.velocity,
                 )
             else:
-                # Arrived at target
+                # Arrived at target → park
                 print(
                     f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
                     f"pos=({agent.x:.1f}, {agent.y:.1f})"
                 )
-                remaining = 0.0
+                self.set_next_state(STATE_STOPPED)
+                return
         else:
             # No schedule — random walk fallback
             angle = random.uniform(0, 2 * math.pi)
@@ -242,7 +319,7 @@ class DrivingState(State):
             agent.y += agent.velocity * math.sin(angle)
             remaining = None
 
-        drain_kw = 7.5
+        drain_kw = agent.energy_per_km * agent.velocity
         energy_used = drain_kw * TICK_SIM_HOURS
         soc_drop = energy_used / agent.battery_capacity_kwh
 

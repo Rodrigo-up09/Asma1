@@ -7,10 +7,12 @@ from .states import (
     DrivingState,
     EVChargingFSM,
     GoingToChargerState,
+    StoppedState,
     WaitingQueueState,
     STATE_CHARGING,
     STATE_DRIVING,
     STATE_GOING_TO_CHARGER,
+    STATE_STOPPED,
     STATE_WAITING_QUEUE,
 )
 from .utils import closest_station, get_station_position
@@ -36,6 +38,7 @@ class EVAgent(Agent):
         self.x = config.get("x", 0.0)
         self.y = config.get("y", 0.0)
         self.velocity = config.get("velocity", 1.0)
+        self.energy_per_km = config.get("energy_per_km", 1)
 
         self.cs_stations = config.get("cs_stations", [])
         self.current_cs_jid = None
@@ -87,6 +90,12 @@ class EVAgent(Agent):
             f"Max charge rate: {self.max_charge_rate_kw} kW | "
             f"Position: ({self.x}, {self.y})"
         )
+        if self.schedule:
+            stops = ", ".join(
+                f"{int(s['hour']):02d}:{int((s['hour'] % 1) * 60):02d} → {s['name']}"
+                for s in self.schedule
+            )
+            print(f"[EV Agent] Schedule: {stops}")
 
         fsm = EVChargingFSM()
 
@@ -94,6 +103,7 @@ class EVAgent(Agent):
         fsm.add_state(name=STATE_GOING_TO_CHARGER, state=GoingToChargerState())
         fsm.add_state(name=STATE_WAITING_QUEUE, state=WaitingQueueState())
         fsm.add_state(name=STATE_CHARGING, state=ChargingState())
+        fsm.add_state(name=STATE_STOPPED, state=StoppedState())
 
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_DRIVING)
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_GOING_TO_CHARGER)
@@ -104,6 +114,10 @@ class EVAgent(Agent):
         fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_DRIVING)
+        fsm.add_transition(source=STATE_DRIVING, dest=STATE_STOPPED)
+        fsm.add_transition(source=STATE_STOPPED, dest=STATE_STOPPED)
+        fsm.add_transition(source=STATE_STOPPED, dest=STATE_DRIVING)
+        fsm.add_transition(source=STATE_STOPPED, dest=STATE_GOING_TO_CHARGER)
 
         template = Template()
         template.set_metadata("protocol", "ev-charging")

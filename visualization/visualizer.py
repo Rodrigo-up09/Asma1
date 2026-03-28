@@ -241,7 +241,13 @@ class WorldVisualizer:
                         ]
                         pygame.draw.polygon(screen, colour, diamond)
                         pygame.draw.polygon(screen, WHITE, diamond, 1)
-                        label = font.render(f"{stop['name']} ({ev_name})", True, colour)
+                        hour = int(stop["hour"])
+                        minute = int((stop["hour"] % 1) * 60)
+                        label = font.render(
+                            f"{stop['name']} ({ev_name}) {hour:02d}:{minute:02d}",
+                            True,
+                            colour,
+                        )
                         screen.blit(label, (tx + 8, ty - 7))
 
             self._draw_legend(screen, font)
