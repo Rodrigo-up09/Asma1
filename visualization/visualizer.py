@@ -196,6 +196,11 @@ class WorldVisualizer:
         except Exception:
             font = pygame.font.Font(None, 16)
 
+        try:
+            time_font = pygame.font.SysFont("dejavusans", 20, bold=True)
+        except Exception:
+            time_font = pygame.font.Font(None, 24)
+
         while not self._stop_event.is_set():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -219,11 +224,7 @@ class WorldVisualizer:
 
             # World clock display
             if self.world_clock:
-                try:
-                    time_font = pygame.font.SysFont("dejavusans", 20, bold=True)
-                except Exception:
-                    time_font = pygame.font.Font(None, 24)
-                time_str = self.world_clock.formatted_day_time()
+                time_str = self.world_clock.formatted_time()
                 time_surface = time_font.render(time_str, True, (255, 220, 100))
                 screen.blit(
                     time_surface, (self.width - time_surface.get_width() - 14, 8)

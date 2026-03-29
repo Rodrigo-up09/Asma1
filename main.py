@@ -1,10 +1,19 @@
 import asyncio
+
 import spade
+
 from agents.cs_agent.cs_agent import CSAgent
 from agents.ev_agent import EVAgent
+from agents.world_agent import WorldAgent
+from environment.world_clock import WorldClock
 from visualization.visualizer import WorldVisualizer
-from world_clock import WorldClock
 
+# ══════════════════════════════════════════════════════════════════════
+#  Deployment configuration
+# ══════════════════════════════════════════════════════════════════════
+
+WORLD_JID = "world@localhost"
+WORLD_PASSWORD = "password"
 
 CS_DEPLOYMENT = [
     {
@@ -33,6 +42,10 @@ CS_DEPLOYMENT = [
     },
 ]
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  Helpers
+# ══════════════════════════════════════════════════════════════════════
 
 def build_active_cs_stations(cs_deployment):
     return [
@@ -63,6 +76,7 @@ def build_ev_deployment(cs_stations):
                 "x": 2.0,
                 "y": 5.0,
                 "cs_stations": cs_stations,
+                # Initial world-state defaults — will be overwritten by first broadcast
                 "electricity_price": 0.15,
                 "grid_load": 0.5,
                 "renewable_available": False,
@@ -91,7 +105,25 @@ def build_ev_deployment(cs_stations):
     ]
 
 
+def _collect_active_jids(cs_deployment, ev_deployment) -> list:
+    """Return JIDs of every enabled EV and CS agent."""
+    jids = []
+    for cs in cs_deployment:
+        if cs.get("enabled", True):
+            jids.append(cs["jid"])
+    for ev in ev_deployment:
+        if ev.get("enabled", True):
+            jids.append(ev["jid"])
+    return jids
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Entry point
+# ══════════════════════════════════════════════════════════════════════
+
 async def main():
+    # ── Shared clock ─────────────────────────────────────────────────
+    # Kept identical to the original constructor call.
     world_clock = WorldClock(real_seconds_per_hour=3.0, start_hour=7.0)
 
     cs_stations = build_active_cs_stations(CS_DEPLOYMENT)
@@ -100,6 +132,7 @@ async def main():
     active_cs_agents = []
     active_ev_agents = []
 
+    # ── CS agents ────────────────────────────────────────────────────
     for cs_data in CS_DEPLOYMENT:
         if not cs_data.get("enabled", True):
             continue
@@ -114,6 +147,7 @@ async def main():
         cs_agent.web.start(hostname="127.0.0.1", port=cs_data["web_port"])
         active_cs_agents.append(cs_agent)
 
+    # ── EV agents ────────────────────────────────────────────────────
     for ev_data in ev_deployment:
         if not ev_data.get("enabled", True):
             continue
@@ -128,24 +162,41 @@ async def main():
         ev_agent.web.start(hostname="127.0.0.1", port=ev_data["web_port"])
         active_ev_agents.append(ev_agent)
 
+    # ── World Agent ──────────────────────────────────────────────────
+    # Must start after EV/CS agents so their XMPP resources are registered
+    # before the first broadcast arrives.
+    all_agent_jids = _collect_active_jids(CS_DEPLOYMENT, ev_deployment)
+
+    world_agent = WorldAgent(
+        jid=WORLD_JID,
+        password=WORLD_PASSWORD,
+        agent_jids=all_agent_jids,
+        world_clock=world_clock,
+    )
+    await world_agent.start()
+
+    # ── Status printout ──────────────────────────────────────────────
     print("\nAll agents running!")
     for ev_data in ev_deployment:
         if ev_data.get("enabled", True):
             x = ev_data["config"]["x"]
             y = ev_data["config"]["y"]
             print(
-                f"   {ev_data['jid']} -> http://127.0.0.1:{ev_data['web_port']}  (pos: {x}, {y})"
+                f"   {ev_data['jid']} -> http://127.0.0.1:{ev_data['web_port']}"
+                f"  (pos: {x}, {y})"
             )
     for cs_data in CS_DEPLOYMENT:
         if cs_data.get("enabled", True):
             x = cs_data["config"]["x"]
             y = cs_data["config"]["y"]
             print(
-                f"   {cs_data['jid']} -> http://127.0.0.1:{cs_data['web_port']}  (pos: {x}, {y})"
+                f"   {cs_data['jid']} -> http://127.0.0.1:{cs_data['web_port']}"
+                f"  (pos: {x}, {y})"
             )
+    print(f"   {WORLD_JID} (environment controller)")
     print("Press Ctrl+C to stop.\n")
 
-    # Launch Pygame visualizer in a background thread
+    # ── Visualizer ───────────────────────────────────────────────────
     viz = WorldVisualizer(
         ev_agents=active_ev_agents,
         cs_agents=active_cs_agents,
@@ -159,6 +210,9 @@ async def main():
         except KeyboardInterrupt:
             viz.stop()
             break
+
+    # ── Shutdown ─────────────────────────────────────────────────────
+    await world_agent.stop()
 
     for ev_agent in active_ev_agents:
         await ev_agent.stop()
