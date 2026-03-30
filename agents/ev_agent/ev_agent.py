@@ -64,6 +64,13 @@ class EVAgent(Agent):
         self.grid_load = config.get("grid_load", 0.5)
         self.renewable_available = config.get("renewable_available", False)
 
+        # WorldAgent JID — set by main.py after construction
+        self.world_jid: str = config.get("world_jid", "")
+
+        # Session tracking (used by states for metric reporting)
+        self._session_kwh: float = 0.0
+        self._queue_entry_time: float = 0.0
+
         self.messaging_service = EVMessagingService()
 
     def _closest_cs(self):

@@ -52,6 +52,9 @@ class CSAgent(Agent):
         self.grid_load: float = 0.5
         self.renewable_available: bool = False
 
+        # WorldAgent JID — set by main.py after construction
+        self.world_jid: str = config.get("world_jid", "")
+
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
         return (

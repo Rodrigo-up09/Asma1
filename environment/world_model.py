@@ -69,10 +69,10 @@ class WorldModel:
     @staticmethod
     def _calc_electricity_price(hour: float) -> float:
         """
-        Night  (00–06) → 0.10 €/kWh   off-peak
-        Day    (06–18) → 0.15 €/kWh   standard
-        Peak   (18–22) → 0.25 €/kWh   evening peak
-        Late   (22–24) → 0.10 €/kWh   off-peak again
+        Night  (00-06) → 0.10 €/kWh   off-peak
+        Day    (06-18) → 0.15 €/kWh   standard
+        Peak   (18-22) → 0.25 €/kWh   evening peak
+        Late   (22-24) → 0.10 €/kWh   off-peak again
         """
         if hour < 6:
             return 0.10
@@ -85,8 +85,8 @@ class WorldModel:
     @staticmethod
     def _calc_grid_load(hour: float) -> float:
         """
-        Morning peak  (07–10) → 0.80
-        Evening peak  (18–22) → 0.90
+        Morning peak  (07-10) → 0.80
+        Evening peak  (18-22) → 0.90
         Otherwise             → 0.40
         """
         if 7 <= hour < 10:

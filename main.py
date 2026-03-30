@@ -26,6 +26,7 @@ CS_DEPLOYMENT = [
             "capacity": 150.0,
             "x": 0.0,
             "y": 10.0,
+            "world_jid": WORLD_JID,
         },
     },
     {
@@ -38,6 +39,7 @@ CS_DEPLOYMENT = [
             "capacity": 100.0,
             "x": 20.0,
             "y": 10.0,
+            "world_jid": WORLD_JID,
         },
     },
 ]
@@ -80,6 +82,7 @@ def build_ev_deployment(cs_stations):
                 "electricity_price": 0.15,
                 "grid_load": 0.5,
                 "renewable_available": False,
+                "world_jid": WORLD_JID,
             },
         },
         {
@@ -100,6 +103,7 @@ def build_ev_deployment(cs_stations):
                 "electricity_price": 0.15,
                 "grid_load": 0.5,
                 "renewable_available": False,
+                "world_jid": WORLD_JID,
             },
         },
     ]

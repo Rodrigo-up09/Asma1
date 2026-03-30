@@ -1,9 +1,40 @@
+import json
+
 from spade.behaviour import FSMBehaviour, State
+from spade.message import Message
 
 from .utils import charging_time_minutes
 
 STATE_AVAILABLE = "AVAILABLE"
-STATE_FULL = "FULL"
+STATE_FULL      = "FULL"
+
+
+# ── Metrics helper ─────────────────────────────
+async def _send_stat(state, world_jid: str, payload: dict) -> None:
+    """Fire-and-forget a world-stats message to the WorldAgent."""
+    if not world_jid:
+        return
+    msg = Message(to=world_jid)
+    msg.set_metadata("protocol", "world-stats")
+    msg.set_metadata("performative", "inform")
+    msg.body = json.dumps(payload)
+    await state.send(msg)
+
+
+async def _report_load(state) -> None:
+    """Send current load kW to the WorldAgent after any door change."""
+    agent       = state.agent
+    world_jid   = getattr(agent, "world_jid", None)
+    current_load = agent.used_doors * agent.max_charging_rate
+    await _send_stat(state, world_jid, {
+        "event":        "load_update",
+        "current_load": current_load,
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  FSM
+# ══════════════════════════════════════════════════════════════════════
 
 class CSChargingFSM(FSMBehaviour):
     async def on_start(self):
@@ -13,16 +44,17 @@ class CSChargingFSM(FSMBehaviour):
         print(f"[FSM] Finished at state: {self.current_state}")
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  Shared mixin
+# ══════════════════════════════════════════════════════════════════════
+
 class CSStateMixin:
     """Shared logic for CS FSM states."""
 
-   
-
     def _estimate_wait_minutes(self, agent, incoming_request):
-        doors = max(1, int(agent.num_doors))
+        doors             = max(1, int(agent.num_doors))
         door_available_at = [0.0] * doors
 
-        # Seed the schedule with currently active charging sessions.
         for session in agent.active_charging.values():
             duration = charging_time_minutes(
                 session.get("required_energy", 0.0),
@@ -32,7 +64,6 @@ class CSStateMixin:
             next_door = min(range(doors), key=lambda idx: door_available_at[idx])
             door_available_at[next_door] += duration
 
-        # Schedule all queued requests in FIFO order.
         for request in agent.request_queue.snapshot():
             duration = charging_time_minutes(
                 request.get("required_energy", 0.0),
@@ -42,16 +73,13 @@ class CSStateMixin:
             next_door = min(range(doors), key=lambda idx: door_available_at[idx])
             door_available_at[next_door] += duration
 
-        # Predicted wait is when this request can start on the first free door.
         return min(door_available_at)
 
     async def _dispatch(self, msg):
         if msg is None:
             return
-
         performative = msg.get_metadata("performative")
-        handler = getattr(self, f"_on_{performative}", None)
-
+        handler      = getattr(self, f"_on_{performative}", None)
         if handler:
             await handler(msg)
 
@@ -59,7 +87,7 @@ class CSStateMixin:
         raise NotImplementedError
 
     async def _on_request(self, msg):
-        agent = self.agent
+        agent  = self.agent
         parsed = agent.messaging_service.parse_request(msg, agent.max_charging_rate)
 
         if not parsed:
@@ -70,7 +98,6 @@ class CSStateMixin:
         if agent.request_queue.contains_ev(ev_jid):
             raise ValueError(f"Duplicate queue entry for EV '{ev_jid}'")
 
-        # If this EV is already charging, acknowledge and ignore stale retries.
         if ev_jid in agent.active_charging:
             await agent.messaging_service.send_response(self, ev_jid, "accept")
             print(f"[CS] Ignored duplicate request from {ev_jid} (already charging)")
@@ -78,6 +105,8 @@ class CSStateMixin:
 
         if agent.can_accept_request(parsed):
             await agent.accept_request(parsed, self, from_queue=False)
+            # ── metric: door opened ──
+            await _report_load(self)
         else:
             estimated_wait_minutes = self._estimate_wait_minutes(agent, parsed)
             agent.request_queue.enqueue(parsed)
@@ -90,7 +119,7 @@ class CSStateMixin:
             print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
 
     async def _on_inform(self, msg):
-        agent = self.agent
+        agent  = self.agent
         parsed = agent.messaging_service.parse_inform_status(msg)
 
         if not parsed:
@@ -104,15 +133,25 @@ class CSStateMixin:
                     f"[CS] {ev_jid} done | Doors free: "
                     f"{agent.num_doors - agent.used_doors}/{agent.num_doors}"
                 )
+                # ── metric: door freed ──
+                await _report_load(self)
 
     async def _process_queue(self):
-        agent = self.agent
+        agent        = self.agent
+        doors_before = agent.used_doors
         await agent.request_queue.dispatch_eligible(
             has_free_door=lambda: agent.used_doors < agent.num_doors,
             can_accept_request=agent.can_accept_request,
             accept_request=lambda req: agent.accept_request(req, self, from_queue=True),
         )
+        # ── metric: report load if any queued EVs were accepted ──
+        if agent.used_doors != doors_before:
+            await _report_load(self)
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  States
+# ══════════════════════════════════════════════════════════════════════
 
 class AvailableState(CSStateMixin, State):
     def _next_state(self):
