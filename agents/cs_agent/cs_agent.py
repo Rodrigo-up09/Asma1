@@ -7,7 +7,6 @@ from spade.agent import Agent
 from .messaging import CSMessagingService
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
-from world_clock import WorldClock
 
 
 # ──────────────────────────────────────────────
@@ -19,7 +18,6 @@ class CSAgent(Agent):
         jid,
         password,
         cs_config=None,
-        world_clock: Optional[WorldClock] = None,
         *args,
         **kwargs,
     ):
@@ -36,7 +34,6 @@ class CSAgent(Agent):
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.messaging_service = CSMessagingService()
-        self.world_clock = world_clock
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
