@@ -1,14 +1,16 @@
 import asyncio
-from typing import Optional
+from typing import Any, Mapping
 
 import spade
 from spade.agent import Agent
 
+
+
+
 from .messaging import CSMessagingService
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
-
-
+from .models import CSConfig
 # ──────────────────────────────────────────────
 #  Charging Station Agent
 # ──────────────────────────────────────────────
@@ -17,19 +19,28 @@ class CSAgent(Agent):
         self,
         jid,
         password,
-        cs_config=None,
+        cs_config: CSConfig | Mapping[str, Any] | None = None,
         *args,
         **kwargs,
     ):
         super().__init__(jid, password, *args, **kwargs)
 
-        config = cs_config or {}
+        if isinstance(cs_config, CSConfig):
+            config = cs_config
+        else:
+            config = CSConfig.from_mapping(cs_config or {})
 
-        self.max_charging_rate = config.get("max_charging_rate", config.get("max_power_kw", 22.0))
-        self.num_doors = config.get("num_doors", 4)
-        self.capacity = config.get("capacity", 150.0)
-        self.x = config.get("x", 0.0)
-        self.y = config.get("y", 0.0)
+        self.max_charging_rate = config.max_charging_rate
+        self.num_doors = config.num_doors
+
+        self.max_solar_capacity = config.max_solar_capacity
+        self.actual_solar_capacity = config.actual_solar_capacity
+        self.energy_price = config.energy_price
+        self.solar_production_rate = config.solar_production_rate
+
+        self.x = config.x
+        self.y = config.y
+
         self.used_doors = 0
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
@@ -40,16 +51,18 @@ class CSAgent(Agent):
         return (
             ev_jid not in self.active_charging
             and self.used_doors < self.num_doors
-            and request["required_energy"] <= self.capacity
+            
         )
 
     async def accept_request(self, request, state, from_queue=False):
         ev_jid = request["ev_jid"]
         self.used_doors += 1
-        self.capacity -= request["required_energy"]
+        if self.actual_solar_capacity >= request["required_energy"]:
+            self.actual_solar_capacity -= request["required_energy"]
         self.active_charging[ev_jid] = {
             "required_energy": request["required_energy"],
             "rate": request["max_charging_rate"],
+            "price": request["required_energy"] * self.energy_price,
         }
 
         await self.messaging_service.send_response(state, ev_jid, "accept")
@@ -72,9 +85,8 @@ class CSAgent(Agent):
         if ev_jid not in self.active_charging:
             return False
 
-        session = self.active_charging.pop(ev_jid)
+        self.active_charging.pop(ev_jid)
         self.used_doors = max(0, self.used_doors - 1)
-        self.capacity += session["required_energy"]
         return True
 
     async def setup(self):
@@ -103,11 +115,10 @@ async def main():
     cs = CSAgent(
         "cs1@localhost",
         "password",
-        cs_config={
-            "max_charging_rate": 22.0,
-            "num_doors": 4,
-            "capacity": 150.0,
-        },
+        cs_config=CSConfig(
+  
+
+        ),
     )
     await cs.start()
     cs.web.start(hostname="127.0.0.1", port=10001)

@@ -1,6 +1,6 @@
 import asyncio
 import spade
-from agents.cs_agent.cs_agent import CSAgent
+from agents.cs_agent import CSAgent, CSConfig
 from agents.ev_agent import EVAgent
 from visualization.visualizer import WorldVisualizer
 from world_clock import WorldClock
@@ -107,7 +107,7 @@ async def main():
         cs_agent = CSAgent(
             cs_data["jid"],
             cs_data["password"],
-            cs_config=cs_data["config"],
+            cs_config=CSConfig.from_mapping(cs_data["config"]),
             world_clock=world_clock,
         )
         await cs_agent.start()

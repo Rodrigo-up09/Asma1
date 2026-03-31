@@ -91,6 +91,33 @@ class CSStateMixin:
 
     async def _on_inform(self, msg):
         agent = self.agent
+        protocol = (msg.get_metadata("protocol") or "").strip()
+
+        # Ignore unrelated protocols explicitly.
+        if protocol and protocol not in {
+            agent.messaging_service.WORLD_PROTOCOL,
+            agent.messaging_service.EV_PROTOCOL,
+        }:
+            return
+
+        # Prefer explicit world protocol for world-originated updates.
+        if protocol == agent.messaging_service.WORLD_PROTOCOL:
+            world_update = agent.messaging_service.parse_world_update(msg)
+            if not world_update:
+                return
+
+            if "energy_price" in world_update:
+                agent.energy_price = max(0.0, world_update["energy_price"])
+                print(f"[CS] World update: energy_price={agent.energy_price:.4f} €/kWh")
+
+            if "solar_production_rate" in world_update:
+                agent.solar_production_rate = max(0.0, world_update["solar_production_rate"])
+                print(
+                    "[CS] World update: "
+                    f"solar_production_rate={agent.solar_production_rate:.2f} kW"
+                )
+            return
+
         parsed = agent.messaging_service.parse_inform_status(msg)
 
         if not parsed:
