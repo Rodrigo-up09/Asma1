@@ -40,7 +40,6 @@ class CSAgent(Agent):
         self.actual_solar_capacity = config.actual_solar_capacity
         self.energy_price = config.energy_price
         self.solar_production_rate = config.solar_production_rate
-        self.solar_discount = self.solar_discount()
         self.x = config.x
         self.y = config.y
 
@@ -149,7 +148,7 @@ class CSAgent(Agent):
         print(
             f"[CS Agent] Doors: {self.num_doors} | "
             f"Max charging rate: {self.max_charging_rate} kW | "
-            f"Capacity: {self.capacity} kWh"
+            f"Max solar capacity: {self.max_solar_capacity} kWh"
         )
 
         fsm = CSChargingFSM()
@@ -160,6 +159,9 @@ class CSAgent(Agent):
         fsm.add_transition(source=STATE_FULL, dest=STATE_FULL)
         fsm.add_transition(source=STATE_FULL, dest=STATE_AVAILABLE)
 
+        # Register FSM without specific template to receive all messages.
+        # The FSM._dispatch will route messages to _on_request or _on_inform
+        # based on performative; the handlers filter by protocol internally.
         self.add_behaviour(fsm)
 
 

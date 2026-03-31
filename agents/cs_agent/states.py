@@ -11,6 +11,13 @@ class CSChargingFSM(FSMBehaviour):
 
     async def on_end(self):
         print(f"[FSM] Finished at state: {self.current_state}")
+    
+    async def on_receive(self, msg):
+        """Process incoming messages by dispatching to current state."""
+        if self.current_state:
+            state = self._states[self.current_state]
+            if hasattr(state, '_dispatch'):
+                await state._dispatch(msg)
 
 
 class CSStateMixin:
@@ -85,7 +92,10 @@ class CSStateMixin:
                 self,
                 ev_jid,
                 "wait",
-                extra={"estimated_wait_minutes": round(estimated_wait_minutes, 2)},
+                extra={
+                    "estimated_wait_minutes": round(estimated_wait_minutes, 2),
+                    "price": agent.energy_price,
+                },
             )
             print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
 

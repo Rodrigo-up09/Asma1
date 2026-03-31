@@ -13,8 +13,12 @@ CS_DEPLOYMENT = [
         "password": "password",
         "web_port": 10001,
         "config": {
-            "num_doors": 1,
-            "capacity": 150.0,
+            "num_doors": 2,
+            "max_charging_rate": 22.0,  # kW por porta
+            "max_solar_capacity": 150.0,  # kWh máximo armazenado
+            "actual_solar_capacity": 75.0,  # kWh iniciais
+            "energy_price": 0.20,  # €/kWh
+            "solar_production_rate": 15.0,  # kW
             "x": 0.0,
             "y": 10.0,
         },
@@ -26,7 +30,11 @@ CS_DEPLOYMENT = [
         "web_port": 10003,
         "config": {
             "num_doors": 2,
-            "capacity": 100.0,
+            "max_charging_rate": 11.0,  # kW por porta
+            "max_solar_capacity": 100.0,  # kWh máximo armazenado
+            "actual_solar_capacity": 50.0,  # kWh iniciais
+            "energy_price": 0.20,  # €/kWh
+            "solar_production_rate": 10.0,  # kW
             "x": 20.0,
             "y": 10.0,
         },
