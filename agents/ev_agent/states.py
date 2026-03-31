@@ -59,44 +59,102 @@ class EVChargingFSM(FSMBehaviour):
 class DrivingState(State):
     async def run(self):
         agent = self.agent
-        name  = str(agent.jid).split("@")[0]
+        name = str(agent.jid).split("@")[0]
         t = (
             agent.world_clock.formatted_time()
             if hasattr(agent, "world_clock") and agent.world_clock
             else "??:??"
         )
 
-        angle   = random.uniform(0, 2 * math.pi)
-        agent.x += agent.velocity * math.cos(angle)
-        agent.y += agent.velocity * math.sin(angle)
+        # Use the locked-in destination, not next_target() which can change
+        target = agent.current_destination
 
-        energy_used = DRIVE_DRAIN_KW * TICK_SIM_HOURS
-        soc_drop    = energy_used / agent.battery_capacity_kwh
-        agent.current_soc = max(0.0, agent.current_soc - soc_drop)
+        if target:
+            dist = math.hypot(target["x"] - agent.x, target["y"] - agent.y)
 
-        print(
-            f"[{t}][{name}][DRIVING] SoC: {agent.current_soc:.0%} "
-            f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
-        )
+            if dist > 1.0:
+                # Still traveling to destination
+                agent.x, agent.y, remaining = move_towards(
+                    agent.x,
+                    agent.y,
+                    target["x"],
+                    target["y"],
+                    agent.velocity,
+                )
+                
+                drain_kw = agent.energy_per_km * agent.velocity
+                energy_used = drain_kw * TICK_SIM_HOURS
+                soc_drop = energy_used / agent.battery_capacity_kwh
 
-        # ── metric: energy consumed while driving ──
-        await _send_stat(self, getattr(agent, "world_jid", None), {
-            "event": "energy_used",
-            "kwh":   energy_used,
-        })
+                agent.current_soc = max(0.0, agent.current_soc - soc_drop)
 
-        await asyncio.sleep(TICK_SLEEP_SECONDS)
+                print(
+                    f"[{t}][{name}][DRIVING] → \"{target['name']}\" | SoC: {agent.current_soc:.0%} "
+                    f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f}) | dist={remaining:.1f}"
+                )
 
-        if agent.current_soc <= agent.low_soc_threshold:
-            agent.current_cs_jid = None
+                # ── metric: energy consumed while driving ──
+                await _send_stat(self, getattr(agent, "world_jid", None), {
+                    "event": "energy_used",
+                    "kwh":   energy_used,
+                })
+
+                await asyncio.sleep(TICK_SLEEP_SECONDS)
+
+                # Check if battery is low
+                if agent.current_soc <= agent.low_soc_threshold:
+                    agent.current_cs_jid = None
+                    print(
+                        f"[{t}][{name}][DRIVING] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
+                    )
+                    self.set_next_state(STATE_GOING_TO_CHARGER)
+                    return
+
+                self.set_next_state(STATE_DRIVING)
+                return
+            else:
+                # Arrived at destination → park and wait for next scheduled departure
+                agent.current_destination = None  # Clear the destination
+                print(
+                    f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
+                    f"pos=({agent.x:.1f}, {agent.y:.1f})"
+                )
+                self.set_next_state(STATE_STOPPED)
+                return
+        else:
+            # No destination set — random walk fallback
+            angle = random.uniform(0, 2 * math.pi)
+            agent.x += agent.velocity * math.cos(angle)
+            agent.y += agent.velocity * math.sin(angle)
+
+            drain_kw = agent.energy_per_km * agent.velocity
+            energy_used = drain_kw * TICK_SIM_HOURS
+            soc_drop = energy_used / agent.battery_capacity_kwh
+
+            agent.current_soc = max(0.0, agent.current_soc - soc_drop)
+
             print(
-                f"[{t}][{name}][DRIVING] SoC below {agent.low_soc_threshold:.0%}, "
-                "heading to charger..."
+                f"[{t}][{name}][DRIVING] SoC: {agent.current_soc:.0%} "
+                f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
             )
-            self.set_next_state(STATE_GOING_TO_CHARGER)
-            return
 
-        self.set_next_state(STATE_DRIVING)
+            # ── metric: energy consumed while driving ──
+            await _send_stat(self, getattr(agent, "world_jid", None), {
+                "event": "energy_used",
+                "kwh":   energy_used,
+            })
+
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+
+            if agent.current_soc <= agent.low_soc_threshold:
+                agent.current_cs_jid = None
+                print(
+                    f"[{t}][{name}][DRIVING] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
+                )
+                self.set_next_state(STATE_GOING_TO_CHARGER)
+                return
+
+            self.set_next_state(STATE_DRIVING)
 
 
 class GoingToChargerState(State):
@@ -329,60 +387,7 @@ class StoppedState(State):
             else "??:??"
         )
 
-        # Current stop the EV is parked at
-        current_stop = None
-        if agent.schedule and 0 <= agent.current_target_index < len(agent.schedule):
-            current_stop = agent.schedule[agent.current_target_index]
-
-        # Next stop is the one after the current target index
-        next_idx = (
-            (agent.current_target_index + 1) % len(agent.schedule)
-            if agent.schedule
-            else 0
-        )
-        next_stop = agent.schedule[next_idx] if agent.schedule else None
-
-        if next_stop:
-            dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
-            travel_hours = dist / agent.velocity if agent.velocity > 0 else float("inf")
-
-            clock = getattr(agent, "world_clock", None)
-            now = clock.time_of_day if clock else 0.0
-
-            target_hour = next_stop["hour"]
-            # Time remaining until the next stop's scheduled hour
-            if target_hour > now:
-                time_remaining = target_hour - now
-            else:
-                # Next stop is tomorrow (day wrap)
-                time_remaining = (24.0 - now) + target_hour
-
-            location_name = current_stop["name"] if current_stop else "unknown"
-
-            if time_remaining <= travel_hours:
-                # Time to leave — advance target index so next_target() returns the next stop
-                agent.current_target_index = next_idx
-                print(
-                    f"[{t}][{name}][STOPPED] Leaving \"{location_name}\" → \"{next_stop['name']}\" "
-                    f"(travel ≈ {travel_hours:.1f}h, remaining {time_remaining:.1f}h)"
-                )
-                self.set_next_state(STATE_DRIVING)
-                await asyncio.sleep(TICK_SLEEP_SECONDS)
-                return
-
-            time_until_leave = time_remaining - travel_hours
-            print(
-                f'[{t}][{name}][STOPPED] Parked at "{location_name}" | '
-                f"SoC: {agent.current_soc:.0%} | leaving in ~{time_until_leave:.1f}h"
-            )
-        else:
-            print(
-                f"[{t}][{name}][STOPPED] Parked (no schedule) | SoC: {agent.current_soc:.0%}"
-            )
-
-        await asyncio.sleep(TICK_SLEEP_SECONDS)
-
-        # Check low SoC while parked
+        # Check low SoC while parked first
         if agent.current_soc <= agent.low_soc_threshold:
             agent.current_cs_jid = None
             print(
@@ -391,72 +396,52 @@ class StoppedState(State):
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
 
-        self.set_next_state(STATE_STOPPED)
+        # Get next destination from schedule (only when stopped, not while driving)
+        next_stop = agent.next_target() if hasattr(agent, "next_target") else None
 
+        if next_stop:
+            # Calculate distance and travel time to next destination
+            dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
+            # velocity is distance per tick, TICK_SIM_HOURS is hours per tick
+            # So: travel_hours = (distance / distance_per_tick) * hours_per_tick
+            travel_hours = (dist / agent.velocity) * TICK_SIM_HOURS if agent.velocity > 0 else float("inf")
 
-class DrivingState(State):
-    async def run(self):
-        agent = self.agent
-        name = str(agent.jid).split("@")[0]
-        t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
-            else "??:??"
-        )
+            clock = getattr(agent, "world_clock", None)
+            now = clock.time_of_day if clock else 0.0
 
-        target = agent.next_target() if hasattr(agent, "next_target") else None
-
-        if target:
-            dist = math.hypot(target["x"] - agent.x, target["y"] - agent.y)
-
-            if dist > 1.0:
-                agent.x, agent.y, remaining = move_towards(
-                    agent.x,
-                    agent.y,
-                    target["x"],
-                    target["y"],
-                    agent.velocity,
-                )
+            target_hour = next_stop["hour"]
+            # Time remaining until the next stop's scheduled arrival hour
+            if target_hour > now:
+                time_until_arrival = target_hour - now
             else:
-                # Arrived at target → park
+                # Next stop is tomorrow (day wrap)
+                time_until_arrival = (24.0 - now) + target_hour
+
+            # Leave when: time_until_arrival <= travel_hours
+            # This means we leave just in time to arrive at the scheduled hour
+            if time_until_arrival <= travel_hours:
                 print(
-                    f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
-                    f"pos=({agent.x:.1f}, {agent.y:.1f})"
+                    f"[{t}][{name}][STOPPED] Time to leave for \"{next_stop['name']}\" "
+                    f"(arrival at {int(target_hour):02d}:{int((target_hour % 1) * 60):02d}, "
+                    f"travel time ≈ {travel_hours:.1f}h)"
                 )
-                self.set_next_state(STATE_STOPPED)
+                # Lock in the destination before starting to drive
+                agent.current_destination = next_stop
+                self.set_next_state(STATE_DRIVING)
+                await asyncio.sleep(TICK_SLEEP_SECONDS)
                 return
-        else:
-            # No schedule — random walk fallback
-            angle = random.uniform(0, 2 * math.pi)
-            agent.x += agent.velocity * math.cos(angle)
-            agent.y += agent.velocity * math.sin(angle)
-            remaining = None
 
-        drain_kw = agent.energy_per_km * agent.velocity
-        energy_used = drain_kw * TICK_SIM_HOURS
-        soc_drop = energy_used / agent.battery_capacity_kwh
-
-        agent.current_soc = max(0.0, agent.current_soc - soc_drop)
-
-        if target and remaining is not None and remaining > 1.0:
+            time_until_leave = time_until_arrival - travel_hours
             print(
-                f"[{t}][{name}][DRIVING] → \"{target['name']}\" | SoC: {agent.current_soc:.0%} "
-                f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f}) | dist={remaining:.1f}"
+                f'[{t}][{name}][STOPPED] Parked | '
+                f"SoC: {agent.current_soc:.0%} | "
+                f"next: \"{next_stop['name']}\" at {int(target_hour):02d}:{int((target_hour % 1) * 60):02d} "
+                f"(leaving in ~{time_until_leave:.1f}h)"
             )
         else:
             print(
-                f"[{t}][{name}][DRIVING] SoC: {agent.current_soc:.0%} "
-                f"(-{energy_used:.1f} kWh) | pos=({agent.x:.1f}, {agent.y:.1f})"
+                f"[{t}][{name}][STOPPED] Parked (no schedule) | SoC: {agent.current_soc:.0%}"
             )
 
         await asyncio.sleep(TICK_SLEEP_SECONDS)
-
-        if agent.current_soc <= agent.low_soc_threshold:
-            agent.current_cs_jid = None
-            print(
-                f"[{t}][{name}][DRIVING] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
-            )
-            self.set_next_state(STATE_GOING_TO_CHARGER)
-            return
-
-        self.set_next_state(STATE_DRIVING)
+        self.set_next_state(STATE_STOPPED)

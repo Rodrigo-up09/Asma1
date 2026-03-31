@@ -36,6 +36,11 @@ class WorldClock:
         sim_hours_elapsed = elapsed_real / self._real_seconds_per_hour
         return (self._start_sim_hour + sim_hours_elapsed) % 24.0
 
+    @property
+    def time_of_day(self) -> float:
+        """Current hour in [0, 24). Alias for current_hour() for compatibility."""
+        return self.current_hour()
+
     def formatted_time(self) -> str:
         """Return current sim time as 'HH:MM' string."""
         hour_f = self.current_hour()

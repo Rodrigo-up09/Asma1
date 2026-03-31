@@ -73,6 +73,7 @@ class EVAgent(Agent):
             key=lambda s: s["hour"],
         )
         self.current_target_index = 0
+        self.current_destination = None  # The destination we're currently heading to
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
 
@@ -125,11 +126,11 @@ class EVAgent(Agent):
 
         fsm = EVChargingFSM()
 
-        fsm.add_state(name=STATE_DRIVING, state=DrivingState(), initial=True)
+        fsm.add_state(name=STATE_STOPPED, state=StoppedState(), initial=True)
+        fsm.add_state(name=STATE_DRIVING, state=DrivingState())
         fsm.add_state(name=STATE_GOING_TO_CHARGER, state=GoingToChargerState())
         fsm.add_state(name=STATE_WAITING_QUEUE, state=WaitingQueueState())
         fsm.add_state(name=STATE_CHARGING, state=ChargingState())
-        fsm.add_state(name=STATE_STOPPED, state=StoppedState())
 
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_DRIVING)
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_GOING_TO_CHARGER)
