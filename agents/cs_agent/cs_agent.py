@@ -1,8 +1,10 @@
 import asyncio
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 import spade
 from spade.agent import Agent
+
+from world_clock import WorldClock
 
 
 
@@ -20,6 +22,7 @@ class CSAgent(Agent):
         jid,
         password,
         cs_config: CSConfig | Mapping[str, Any] | None = None,
+        world_clock: Optional[WorldClock] = None,
         *args,
         **kwargs,
     ):
@@ -37,7 +40,7 @@ class CSAgent(Agent):
         self.actual_solar_capacity = config.actual_solar_capacity
         self.energy_price = config.energy_price
         self.solar_production_rate = config.solar_production_rate
-
+        self.solar_discount = self.solar_discount()
         self.x = config.x
         self.y = config.y
 
@@ -45,6 +48,44 @@ class CSAgent(Agent):
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.messaging_service = CSMessagingService()
+        self.world_clock = world_clock
+        self._last_solar_update_sim_hours = (
+            self.world_clock.sim_hours if self.world_clock is not None else None
+        )
+    def solar_discount(self):
+        if self.actual_solar_capacity <= 0.0:
+            return 0.0
+        max_discount = 0.3
+        return min(max_discount, (self.actual_solar_capacity / self.max_solar_capacity) * max_discount)
+    
+    def update_solar_energy(self) -> float:
+        """Accumulate solar energy using simulated time delta.
+
+        Assumptions:
+        - `solar_production_rate` is in kW.
+        - `actual_solar_capacity` and `max_solar_capacity` are in kWh.
+        """
+        if self.world_clock is None:
+            return 0.0
+
+        now_sim_hours = float(self.world_clock.sim_hours)
+        if self._last_solar_update_sim_hours is None:
+            self._last_solar_update_sim_hours = now_sim_hours
+            return 0.0
+
+        delta_hours = max(0.0, now_sim_hours - self._last_solar_update_sim_hours)
+        self._last_solar_update_sim_hours = now_sim_hours
+
+        if delta_hours <= 0.0 or self.solar_production_rate <= 0.0:
+            return 0.0
+
+        generated_kwh = float(self.solar_production_rate) * delta_hours
+        previous = float(self.actual_solar_capacity)
+        self.actual_solar_capacity = min(
+            float(self.max_solar_capacity),
+            previous + generated_kwh,
+        )
+        return self.actual_solar_capacity - previous
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
@@ -59,13 +100,27 @@ class CSAgent(Agent):
         self.used_doors += 1
         if self.actual_solar_capacity >= request["required_energy"]:
             self.actual_solar_capacity -= request["required_energy"]
+        
+        # Calculate price with current solar discount
+        discount = self.solar_discount()
+        final_price = request["required_energy"] * self.energy_price * (1 - discount)
+        
         self.active_charging[ev_jid] = {
             "required_energy": request["required_energy"],
             "rate": request["max_charging_rate"],
-            "price": request["required_energy"] * self.energy_price,
+            "price": final_price,
         }
 
-        await self.messaging_service.send_response(state, ev_jid, "accept")
+        await self.messaging_service.send_response(
+            state, 
+            ev_jid, 
+            "accept",
+            extra={
+                "price": final_price,
+                "solar_discount": discount,
+                "energy_price": self.energy_price,
+            }
+        )
 
         if from_queue:
             print(

@@ -148,6 +148,7 @@ class AvailableState(CSStateMixin, State):
         return STATE_AVAILABLE
 
     async def run(self):
+        self.agent.update_solar_energy()
         await self._dispatch(await self.receive(timeout=5))
         self.set_next_state(self._next_state())
 
@@ -159,6 +160,7 @@ class FullState(CSStateMixin, State):
         return STATE_FULL
 
     async def run(self):
+        self.agent.update_solar_energy()
         await self._dispatch(await self.receive(timeout=1))
         await self._process_queue()
         self.set_next_state(self._next_state())
