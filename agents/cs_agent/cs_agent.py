@@ -1,11 +1,31 @@
 import asyncio
+import json
 
 import spade
 from spade.agent import Agent
+from spade.behaviour import CyclicBehaviour
+from spade.template import Template
 
 from .messaging import CSMessagingService
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
+
+
+class WorldUpdateBehaviour(CyclicBehaviour):
+    """Receive world-update broadcasts from the WorldAgent and update local state."""
+
+    async def run(self) -> None:
+        msg = await self.receive(timeout=5)
+        if msg is None:
+            return
+        try:
+            data = json.loads(msg.body)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        self.agent.electricity_price = data.get("electricity_price", self.agent.electricity_price)
+        self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
+        self.agent.renewable_available = data.get("renewable_available", self.agent.renewable_available)
 
 
 # ──────────────────────────────────────────────
@@ -26,6 +46,14 @@ class CSAgent(Agent):
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.messaging_service = CSMessagingService()
+
+        # World-state — updated by WorldUpdateBehaviour on each broadcast
+        self.electricity_price: float = 0.15
+        self.grid_load: float = 0.5
+        self.renewable_available: bool = False
+
+        # WorldAgent JID — set by main.py after construction
+        self.world_jid: str = config.get("world_jid", "")
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
@@ -86,6 +114,10 @@ class CSAgent(Agent):
         fsm.add_transition(source=STATE_FULL, dest=STATE_AVAILABLE)
 
         self.add_behaviour(fsm)
+
+        world_update_template = Template()
+        world_update_template.set_metadata("protocol", "world-update")
+        self.add_behaviour(WorldUpdateBehaviour(), world_update_template)
 
 
 # ──────────────────────────────────────────────

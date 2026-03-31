@@ -1,4 +1,7 @@
+import json
+
 from spade.agent import Agent
+from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from .messaging import EVMessagingService
@@ -16,6 +19,23 @@ from .states import (
     STATE_WAITING_QUEUE,
 )
 from .utils import closest_station, get_station_position
+
+
+class WorldUpdateBehaviour(CyclicBehaviour):
+    """Receive world-update broadcasts from the WorldAgent and update local state."""
+
+    async def run(self) -> None:
+        msg = await self.receive(timeout=5)
+        if msg is None:
+            return
+        try:
+            data = json.loads(msg.body)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        self.agent.electricity_price = data.get("electricity_price", self.agent.electricity_price)
+        self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
+        self.agent.renewable_available = data.get("renewable_available", self.agent.renewable_available)
 
 
 class EVAgent(Agent):
@@ -53,6 +73,12 @@ class EVAgent(Agent):
             key=lambda s: s["hour"],
         )
         self.current_target_index = 0
+        # WorldAgent JID — set by main.py after construction
+        self.world_jid: str = config.get("world_jid", "")
+
+        # Session tracking (used by states for metric reporting)
+        self._session_kwh: float = 0.0
+        self._queue_entry_time: float = 0.0
 
         self.messaging_service = EVMessagingService()
 
@@ -123,3 +149,7 @@ class EVAgent(Agent):
         template.set_metadata("protocol", "ev-charging")
 
         self.add_behaviour(fsm, template)
+
+        world_update_template = Template()
+        world_update_template.set_metadata("protocol", "world-update")
+        self.add_behaviour(WorldUpdateBehaviour(), world_update_template)
