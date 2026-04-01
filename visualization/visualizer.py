@@ -109,6 +109,11 @@ class WorldVisualizer:
         info = font.render(f"{cs.used_doors}/{cs.num_doors} doors", True, TEXT_DIM)
         surface.blit(info, (sx - info.get_width() // 2, sy + size + 18))
 
+        # Electricity price
+        price = getattr(cs, 'electricity_price', 0.0)
+        price_text = font.render(f"${price:.2f}/kWh", True, (255, 220, 100))
+        surface.blit(price_text, (sx - price_text.get_width() // 2, sy + size + 32))
+
     def _ev_state(self, ev):
         """Best-effort FSM state detection."""
         # Check if there is an active behaviour with current_state

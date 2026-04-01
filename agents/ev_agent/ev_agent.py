@@ -1,5 +1,7 @@
 import json
 
+from typing import Optional
+
 from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour
 from spade.template import Template
@@ -39,7 +41,14 @@ class WorldUpdateBehaviour(CyclicBehaviour):
 
 
 class EVAgent(Agent):
-    def __init__(self, jid, password, ev_config=None, *args, **kwargs):
+    def __init__(
+        self,
+        jid,
+        password,
+        ev_config=None,
+        *args,
+        **kwargs,
+    ):
         super().__init__(jid, password, *args, **kwargs)
 
         config = ev_config or {}
@@ -82,6 +91,27 @@ class EVAgent(Agent):
         self._queue_entry_time: float = 0.0
 
         self.messaging_service = EVMessagingService()
+        self.world_clock = None
+
+    def next_target(self):
+        """Return the next scheduled destination based on world clock time."""
+        if not self.schedule:
+            return None
+
+        clock = getattr(self, "world_clock", None)
+        if not clock:
+            return self.schedule[self.current_target_index]
+
+        now = clock.time_of_day
+        # Find the next stop whose hour hasn't passed yet today
+        for i, stop in enumerate(self.schedule):
+            if stop["hour"] > now:
+                self.current_target_index = i
+                return stop
+
+        # All stops passed for today → wrap to first stop (tomorrow)
+        self.current_target_index = 0
+        return self.schedule[0]
 
     def next_target(self):
         """Return the next scheduled destination based on world clock time."""

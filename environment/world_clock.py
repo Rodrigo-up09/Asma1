@@ -37,6 +37,12 @@ class WorldClock:
         return (self._start_sim_hour + sim_hours_elapsed) % 24.0
 
     @property
+    def sim_hours(self) -> float:
+        """Total simulated hours since start (unbounded)."""
+        elapsed_real = time.monotonic() - self._start_real
+        return self._start_sim_hour + elapsed_real / self._real_seconds_per_hour
+
+    @property
     def time_of_day(self) -> float:
         """Current hour in [0, 24). Alias for current_hour() for compatibility."""
         return self.current_hour()

@@ -42,11 +42,14 @@ class CSChargingFSM(FSMBehaviour):
 
     async def on_end(self):
         print(f"[FSM] Finished at state: {self.current_state}")
+    
+    async def on_receive(self, msg):
+        """Process incoming messages by dispatching to current state."""
+        if self.current_state:
+            state = self._states[self.current_state]
+            if hasattr(state, '_dispatch'):
+                await state._dispatch(msg)
 
-
-# ══════════════════════════════════════════════════════════════════════
-#  Shared mixin
-# ══════════════════════════════════════════════════════════════════════
 
 class CSStateMixin:
     """Shared logic for CS FSM states."""
@@ -114,12 +117,42 @@ class CSStateMixin:
                 self,
                 ev_jid,
                 "wait",
-                extra={"estimated_wait_minutes": round(estimated_wait_minutes, 2)},
+                extra={
+                    "estimated_wait_minutes": round(estimated_wait_minutes, 2),
+                    "price": agent.energy_price,
+                },
             )
             print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
 
     async def _on_inform(self, msg):
-        agent  = self.agent
+        agent = self.agent
+        protocol = (msg.get_metadata("protocol") or "").strip()
+
+        # Ignore unrelated protocols explicitly.
+        if protocol and protocol not in {
+            agent.messaging_service.WORLD_PROTOCOL,
+            agent.messaging_service.EV_PROTOCOL,
+        }:
+            return
+
+        # Prefer explicit world protocol for world-originated updates.
+        if protocol == agent.messaging_service.WORLD_PROTOCOL:
+            world_update = agent.messaging_service.parse_world_update(msg)
+            if not world_update:
+                return
+
+            if "energy_price" in world_update:
+                agent.energy_price = max(0.0, world_update["energy_price"])
+                print(f"[CS] World update: energy_price={agent.energy_price:.4f} €/kWh")
+
+            if "solar_production_rate" in world_update:
+                agent.solar_production_rate = max(0.0, world_update["solar_production_rate"])
+                print(
+                    "[CS] World update: "
+                    f"solar_production_rate={agent.solar_production_rate:.2f} kW"
+                )
+            return
+
         parsed = agent.messaging_service.parse_inform_status(msg)
 
         if not parsed:
@@ -160,6 +193,7 @@ class AvailableState(CSStateMixin, State):
         return STATE_AVAILABLE
 
     async def run(self):
+        self.agent.update_solar_energy()
         await self._dispatch(await self.receive(timeout=5))
         self.set_next_state(self._next_state())
 
@@ -171,6 +205,7 @@ class FullState(CSStateMixin, State):
         return STATE_FULL
 
     async def run(self):
+        self.agent.update_solar_energy()
         await self._dispatch(await self.receive(timeout=1))
         await self._process_queue()
         self.set_next_state(self._next_state())
