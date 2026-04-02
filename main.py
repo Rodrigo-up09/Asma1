@@ -82,6 +82,7 @@ def build_ev_deployment(cs_stations):
                 "target_soc": 0.80,
                 "departure_time": "08:00",
                 "max_charge_rate_kw": 22.0,
+                "velocity": 1.0,  # units per tick (faster travel)
                 "x": -10.0,
                 "y": -5.0,
                 "cs_stations": cs_stations,
@@ -108,6 +109,7 @@ def build_ev_deployment(cs_stations):
                 "target_soc": 0.80,
                 "departure_time": "09:00",
                 "max_charge_rate_kw": 11.0,
+                "velocity": 1.0,  # units per tick (faster travel)
                 "x": 10.0,
                 "y": -10.0,
                 "cs_stations": cs_stations,
@@ -142,8 +144,9 @@ def _collect_active_jids(cs_deployment, ev_deployment) -> list:
 
 async def main():
     # ── Shared clock ─────────────────────────────────────────────────
-    # Kept identical to the original constructor call.
-    world_clock = WorldClock(real_seconds_per_hour=3.0, start_hour=0.0)
+    # Start at 7:00 AM so EVs are at home before their morning departure
+    # Lower real_seconds_per_hour = faster simulation (1.0 = 1 real second per sim hour)
+    world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
 
     cs_stations = build_active_cs_stations(CS_DEPLOYMENT)
     ev_deployment = build_ev_deployment(cs_stations)

@@ -20,8 +20,8 @@ STATE_DRIVING = "DRIVING"
 STATE_STOPPED = "STOPPED"
 
 # ── Tick timing ────────────────────────────────
-TICK_SLEEP_SECONDS = 0.5   # real-time delay between ticks
-TICK_SIM_HOURS     = 0.25  # sim-hours per tick (15 sim-minutes)
+TICK_SLEEP_SECONDS = 0.1   # real-time delay between ticks
+# REMOVED: TICK_SIM_HOURS - now calculated from world clock
 
 DRIVE_DRAIN_KW = 7.5       # energy consumption while moving
 
@@ -60,11 +60,17 @@ class DrivingState(State):
     async def run(self):
         agent = self.agent
         name = str(agent.jid).split("@")[0]
-        t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
-            else "??:??"
-        )
+        
+        # Track time at start of tick
+        clock = getattr(agent, "world_clock", None)
+        if not clock:
+            print(f"[{name}][DRIVING] ERROR: No world clock available!")
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            self.set_next_state(STATE_DRIVING)
+            return
+            
+        time_before = clock.sim_hours
+        t = clock.formatted_time()
 
         # Use the locked-in destination, not next_target() which can change
         target = agent.current_destination
@@ -82,8 +88,13 @@ class DrivingState(State):
                     agent.velocity,
                 )
                 
+                # Wait for real time to pass, then calculate actual sim time elapsed
+                await asyncio.sleep(TICK_SLEEP_SECONDS)
+                time_after = clock.sim_hours
+                tick_sim_hours = time_after - time_before
+                
                 drain_kw = agent.energy_per_km * agent.velocity
-                energy_used = drain_kw * TICK_SIM_HOURS
+                energy_used = drain_kw * tick_sim_hours
                 soc_drop = energy_used / agent.battery_capacity_kwh
 
                 agent.current_soc = max(0.0, agent.current_soc - soc_drop)
@@ -98,8 +109,6 @@ class DrivingState(State):
                     "event": "energy_used",
                     "kwh":   energy_used,
                 })
-
-                await asyncio.sleep(TICK_SLEEP_SECONDS)
 
                 # Check if battery is low
                 if agent.current_soc <= agent.low_soc_threshold:
@@ -127,8 +136,13 @@ class DrivingState(State):
             agent.x += agent.velocity * math.cos(angle)
             agent.y += agent.velocity * math.sin(angle)
 
+            # Wait for real time to pass, then calculate actual sim time elapsed
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            time_after = clock.sim_hours
+            tick_sim_hours = time_after - time_before
+
             drain_kw = agent.energy_per_km * agent.velocity
-            energy_used = drain_kw * TICK_SIM_HOURS
+            energy_used = drain_kw * tick_sim_hours
             soc_drop = energy_used / agent.battery_capacity_kwh
 
             agent.current_soc = max(0.0, agent.current_soc - soc_drop)
@@ -143,8 +157,6 @@ class DrivingState(State):
                 "event": "energy_used",
                 "kwh":   energy_used,
             })
-
-            await asyncio.sleep(TICK_SLEEP_SECONDS)
 
             if agent.current_soc <= agent.low_soc_threshold:
                 agent.current_cs_jid = None
@@ -161,11 +173,16 @@ class GoingToChargerState(State):
     async def run(self):
         agent = self.agent
         name  = str(agent.jid).split("@")[0]
-        t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
-            else "??:??"
-        )
+        
+        clock = getattr(agent, "world_clock", None)
+        if not clock:
+            print(f"[{name}][GOING_TO_CHARGER] ERROR: No world clock available!")
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+            
+        time_before = clock.sim_hours
+        t = clock.formatted_time()
 
         if not agent.current_cs_jid:
             closest_jid, dist = closest_station(agent.x, agent.y, agent.cs_stations)
@@ -193,9 +210,13 @@ class GoingToChargerState(State):
                 agent.velocity,
             )
 
+            # Wait for real time to pass, then calculate actual sim time elapsed
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            time_after = clock.sim_hours
+            tick_sim_hours = time_after - time_before
+
             drain_kw = agent.energy_per_km * agent.velocity
-            tick_hours = TICK_SIM_HOURS
-            energy_used = drain_kw * tick_hours
+            energy_used = drain_kw * tick_sim_hours
             soc_drop = energy_used / agent.battery_capacity_kwh
             agent.current_soc = max(0.0, agent.current_soc - soc_drop)
 
@@ -211,7 +232,6 @@ class GoingToChargerState(State):
                 "kwh":   energy_used,
             })
 
-            await asyncio.sleep(TICK_SLEEP_SECONDS)
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
 
@@ -333,13 +353,23 @@ class ChargingState(State):
     async def run(self):
         agent = self.agent
         name  = str(agent.jid).split("@")[0]
-        t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
-            else "??:??"
-        )
+        
+        clock = getattr(agent, "world_clock", None)
+        if not clock:
+            print(f"[{name}][CHARGING] ERROR: No world clock available!")
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            self.set_next_state(STATE_CHARGING)
+            return
+            
+        time_before = clock.sim_hours
+        t = clock.formatted_time()
 
-        energy_added = agent.max_charge_rate_kw * TICK_SIM_HOURS
+        # Wait for real time to pass, then calculate actual sim time elapsed
+        await asyncio.sleep(TICK_SLEEP_SECONDS)
+        time_after = clock.sim_hours
+        tick_sim_hours = time_after - time_before
+
+        energy_added = agent.max_charge_rate_kw * tick_sim_hours
         soc_gain     = energy_added / agent.battery_capacity_kwh
         agent.current_soc = min(1.0, agent.current_soc + soc_gain)
 
@@ -350,8 +380,6 @@ class ChargingState(State):
             f"[{t}][{name}][CHARGING] SoC: {agent.current_soc:.0%} "
             f"(+{energy_added:.1f} kWh)"
         )
-
-        await asyncio.sleep(TICK_SLEEP_SECONDS)
 
         if agent.current_soc >= agent.target_soc:
             print(f"[{t}][{name}][CHARGING] Fully charged! Resuming driving.")
@@ -381,11 +409,15 @@ class StoppedState(State):
     async def run(self):
         agent = self.agent
         name = str(agent.jid).split("@")[0]
-        t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
-            else "??:??"
-        )
+        
+        clock = getattr(agent, "world_clock", None)
+        if not clock:
+            print(f"[{name}][STOPPED] ERROR: No world clock available!")
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            self.set_next_state(STATE_STOPPED)
+            return
+            
+        t = clock.formatted_time()
 
         # Check low SoC while parked first
         if agent.current_soc <= agent.low_soc_threshold:
@@ -402,12 +434,22 @@ class StoppedState(State):
         if next_stop:
             # Calculate distance and travel time to next destination
             dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
-            # velocity is distance per tick, TICK_SIM_HOURS is hours per tick
-            # So: travel_hours = (distance / distance_per_tick) * hours_per_tick
-            travel_hours = (dist / agent.velocity) * TICK_SIM_HOURS if agent.velocity > 0 else float("inf")
+            
+            # Calculate actual travel time based on world clock timing
+            # velocity is distance per tick
+            # We need to know how many sim hours per tick
+            # Sample the world clock to determine sim hours per tick
+            time_before = clock.sim_hours
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
+            time_after = clock.sim_hours
+            tick_sim_hours = time_after - time_before
+            
+            # Number of ticks needed = distance / velocity
+            # Travel time in sim hours = num_ticks * tick_sim_hours
+            num_ticks = dist / agent.velocity if agent.velocity > 0 else float("inf")
+            travel_hours = num_ticks * tick_sim_hours
 
-            clock = getattr(agent, "world_clock", None)
-            now = clock.time_of_day if clock else 0.0
+            now = clock.time_of_day
 
             target_hour = next_stop["hour"]
             # Time remaining until the next stop's scheduled arrival hour
@@ -428,7 +470,6 @@ class StoppedState(State):
                 # Lock in the destination before starting to drive
                 agent.current_destination = next_stop
                 self.set_next_state(STATE_DRIVING)
-                await asyncio.sleep(TICK_SLEEP_SECONDS)
                 return
 
             time_until_leave = time_until_arrival - travel_hours
@@ -442,6 +483,6 @@ class StoppedState(State):
             print(
                 f"[{t}][{name}][STOPPED] Parked (no schedule) | SoC: {agent.current_soc:.0%}"
             )
+            await asyncio.sleep(TICK_SLEEP_SECONDS)
 
-        await asyncio.sleep(TICK_SLEEP_SECONDS)
         self.set_next_state(STATE_STOPPED)
