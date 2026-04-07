@@ -56,6 +56,7 @@ CS_DEPLOYMENT = [
 #  Helpers
 # ══════════════════════════════════════════════════════════════════════
 
+
 def build_active_cs_stations(cs_deployment):
     return [
         {
@@ -82,7 +83,8 @@ def build_ev_deployment(cs_stations):
                 "target_soc": 0.80,
                 "departure_time": "08:00",
                 "max_charge_rate_kw": 22.0,
-                "velocity": 1.0,  # units per tick (faster travel)
+                "velocity": 3.0,  # units per tick
+                "energy_per_km": 2,  # kWh per km — higher = more drain
                 "x": -10.0,
                 "y": -5.0,
                 "cs_stations": cs_stations,
@@ -91,8 +93,41 @@ def build_ev_deployment(cs_stations):
                 "grid_load": 0.5,
                 "renewable_available": False,
                 "schedule": [
-                    {"name": "Work", "x": 15.0, "y": 20.0, "hour": 9.0},
-                    {"name": "Home", "x": -10.0, "y": -5.0, "hour": 18.0},
+                    {
+                        "name": "Work",
+                        "x": 15.0,
+                        "y": 20.0,
+                        "hour": 9.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Home",
+                        "x": -10.0,
+                        "y": -5.0,
+                        "hour": 12.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Work",
+                        "x": 15.0,
+                        "y": 20.0,
+                        "hour": 13.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Free Drive",
+                        "x": 0.0,
+                        "y": 0.0,
+                        "hour": 17.0,
+                        "type": "free_drive",
+                    },
+                    {
+                        "name": "Home",
+                        "x": -10.0,
+                        "y": -5.0,
+                        "hour": 20.0,
+                        "type": "destination",
+                    },
                 ],
                 "world_jid": WORLD_JID,
             },
@@ -109,7 +144,8 @@ def build_ev_deployment(cs_stations):
                 "target_soc": 0.80,
                 "departure_time": "09:00",
                 "max_charge_rate_kw": 11.0,
-                "velocity": 1.0,  # units per tick (faster travel)
+                "velocity": 3.0,  # units per tick
+                "energy_per_km": 3,  # kWh per km — higher = more drain
                 "x": 10.0,
                 "y": -10.0,
                 "cs_stations": cs_stations,
@@ -117,8 +153,41 @@ def build_ev_deployment(cs_stations):
                 "grid_load": 0.5,
                 "renewable_available": False,
                 "schedule": [
-                    {"name": "Office", "x": -15.0, "y": 15.0, "hour": 8.0},
-                    {"name": "Home", "x": 10.0, "y": -10.0, "hour": 17.0},
+                    {
+                        "name": "Office",
+                        "x": -15.0,
+                        "y": 15.0,
+                        "hour": 8.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Home",
+                        "x": 10.0,
+                        "y": -10.0,
+                        "hour": 12.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Office",
+                        "x": -15.0,
+                        "y": 15.0,
+                        "hour": 13.0,
+                        "type": "destination",
+                    },
+                    {
+                        "name": "Free Drive",
+                        "x": 0.0,
+                        "y": 0.0,
+                        "hour": 17.0,
+                        "type": "free_drive",
+                    },
+                    {
+                        "name": "Home",
+                        "x": 10.0,
+                        "y": -10.0,
+                        "hour": 20.0,
+                        "type": "destination",
+                    },
                 ],
                 "world_jid": WORLD_JID,
             },
@@ -141,6 +210,7 @@ def _collect_active_jids(cs_deployment, ev_deployment) -> list:
 # ══════════════════════════════════════════════════════════════════════
 #  Entry point
 # ══════════════════════════════════════════════════════════════════════
+
 
 async def main():
     # ── Shared clock ─────────────────────────────────────────────────

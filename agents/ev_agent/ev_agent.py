@@ -35,9 +35,13 @@ class WorldUpdateBehaviour(CyclicBehaviour):
         except (json.JSONDecodeError, TypeError):
             return
 
-        self.agent.electricity_price = data.get("electricity_price", self.agent.electricity_price)
+        self.agent.electricity_price = data.get(
+            "electricity_price", self.agent.electricity_price
+        )
         self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
-        self.agent.renewable_available = data.get("renewable_available", self.agent.renewable_available)
+        self.agent.renewable_available = data.get(
+            "renewable_available", self.agent.renewable_available
+        )
 
 
 class EVAgent(Agent):
@@ -83,6 +87,7 @@ class EVAgent(Agent):
         )
         self.current_target_index = 0
         self.current_destination = None  # The destination we're currently heading to
+        self.free_driving = False  # True when in free-drive (random walk) window
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
 
@@ -113,25 +118,16 @@ class EVAgent(Agent):
         self.current_target_index = 0
         return self.schedule[0]
 
-    def next_target(self):
-        """Return the next scheduled destination based on world clock time."""
-        if not self.schedule:
+    def next_after(self, target):
+        """Return the schedule entry that comes after `target`.
+        Wraps around to the first entry if target is the last one."""
+        if not self.schedule or not target:
             return None
-
-        clock = getattr(self, "world_clock", None)
-        if not clock:
-            return self.schedule[self.current_target_index]
-
-        now = clock.time_of_day
-        # Find the next stop whose hour hasn't passed yet today
-        for i, stop in enumerate(self.schedule):
-            if stop["hour"] > now:
-                self.current_target_index = i
-                return stop
-
-        # All stops passed for today → wrap to first stop (tomorrow)
-        self.current_target_index = 0
-        return self.schedule[0]
+        try:
+            idx = self.schedule.index(target)
+        except ValueError:
+            return None
+        return self.schedule[(idx + 1) % len(self.schedule)]
 
     def _closest_cs(self):
         return closest_station(self.x, self.y, self.cs_stations)
