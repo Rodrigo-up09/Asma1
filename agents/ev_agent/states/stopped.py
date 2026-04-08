@@ -80,7 +80,7 @@ class StoppedState(State):
 
             # ── Energy prediction: do we need a charging detour? ──
             needs_charge_detour = False
-            detour_extra_hours = 0.0
+            detour_total_hours = 0.0  # Initialize to 0
 
             if stop_type == "destination" and dist > 0:
                 energy_needed = _estimate_energy_for_trip(
@@ -97,6 +97,16 @@ class StoppedState(State):
                     cs_jid, dist_to_cs = closest_station(
                         agent.x, agent.y, agent.cs_stations
                     )
+                    
+                    # Debug: show CS search
+                    print(
+                        f"[{t}][{name}][STOPPED] Searching for CS:\n"
+                        f"  Current position: ({agent.x:.1f}, {agent.y:.1f})\n"
+                        f"  Available stations: {len(agent.cs_stations)}\n"
+                        f"  Stations: {agent.cs_stations}\n"
+                        f"  Closest CS: {cs_jid} at distance {dist_to_cs:.1f}"
+                    )
+                    
                     if cs_jid:
                         # Estimate: drive to CS + charge up + drive from CS to destination
                         cs_station = next(
@@ -114,30 +124,57 @@ class StoppedState(State):
                             travel_cs_to_dest = _estimate_travel_hours(
                                 dist_cs_to_dest, agent.velocity, tick_sim_hours
                             )
-                            # Charging time: charge enough for the CS→dest leg + reserve
-                            energy_for_cs_to_dest = _estimate_energy_for_trip(
-                                dist_cs_to_dest,
+                            # Charging time: charge to target_soc (what actually happens)
+                            energy_to_reach_cs = _estimate_energy_for_trip(
+                                dist_to_cs,
                                 agent.velocity,
                                 agent.energy_per_km,
                                 tick_sim_hours,
                             )
-                            energy_deficit = (
-                                energy_for_cs_to_dest + reserve
-                            ) - current_energy
-                            if energy_deficit > 0:
-                                charge_hours = energy_deficit / agent.max_charge_rate_kw
+                            # SoC when arriving at CS
+                            soc_at_cs = agent.current_soc - (energy_to_reach_cs / agent.battery_capacity_kwh)
+                            soc_at_cs = max(0.0, soc_at_cs)
+                            
+                            # Charge from soc_at_cs to target_soc (this is what actually happens!)
+                            energy_to_charge = (agent.target_soc - soc_at_cs) * agent.battery_capacity_kwh
+                            
+                            if energy_to_charge > 0:
+                                charge_hours = energy_to_charge / agent.max_charge_rate_kw
                             else:
                                 charge_hours = 0.0
 
-                            detour_extra_hours = (
+                            detour_total_hours = (
                                 travel_to_cs + charge_hours + travel_cs_to_dest
-                            ) - travel_hours  # subtract direct route since we replace it
+                            )
+                            
+                            # Debug output
+                            print(
+                                f"[{t}][{name}][STOPPED] Charging detour calculation:\n"
+                                f"  Current SoC: {agent.current_soc:.0%} ({current_energy:.1f} kWh)\n"
+                                f"  Distance home→dest: {dist:.1f} units (direct)\n"
+                                f"  Distance home→CS: {dist_to_cs:.1f} units\n"
+                                f"  Distance CS→dest: {dist_cs_to_dest:.1f} units\n"
+                                f"  Energy to reach CS: {energy_to_reach_cs:.1f} kWh\n"
+                                f"  SoC at CS: {soc_at_cs:.0%}\n"
+                                f"  Target SoC: {agent.target_soc:.0%}\n"
+                                f"  Energy to charge: {energy_to_charge:.1f} kWh\n"
+                                f"  Charge time: {charge_hours:.2f} hours\n"
+                                f"  Travel home→CS: {travel_to_cs:.2f} hours\n"
+                                f"  Travel CS→dest: {travel_cs_to_dest:.2f} hours\n"
+                                f"  Total detour time: {detour_total_hours:.2f} hours\n"
+                                f"  Direct travel time: {travel_hours:.2f} hours"
+                            )
+                        else:
+                            # CS not found in list - can't calculate detour
+                            print(f"[{t}][{name}][STOPPED] WARNING: CS {cs_jid} not in station list, can't plan detour!")
+                            needs_charge_detour = False
+                    else:
+                        # No CS available - can't plan detour
+                        print(f"[{t}][{name}][STOPPED] WARNING: No charging station available, can't plan detour!")
+                        needs_charge_detour = False
 
-                            if detour_extra_hours < 0:
-                                detour_extra_hours = 0.0
-
-            # Total time needed including potential detour
-            total_travel_hours = travel_hours + detour_extra_hours
+            # Total time needed: use detour time if charging is needed, otherwise direct route
+            total_travel_hours = detour_total_hours if needs_charge_detour else travel_hours
 
             now = clock.time_of_day
             target_hour = next_stop["hour"]
@@ -148,29 +185,33 @@ class StoppedState(State):
                 # Next stop is tomorrow (day wrap)
                 time_until_arrival = (24.0 - now) + target_hour
 
+            # Debug: show departure calculation
+            print(
+                f"[{t}][{name}][STOPPED] Departure calculation:\n"
+                f"  Current time: {now:.2f} ({t})\n"
+                f"  Target arrival: {target_hour:.2f} ({int(target_hour):02d}:{int((target_hour % 1) * 60):02d})\n"
+                f"  Time until arrival: {time_until_arrival:.2f} hours\n"
+                f"  Total travel time needed: {total_travel_hours:.2f} hours\n"
+                f"  Needs charge detour: {needs_charge_detour}\n"
+                f"  Should leave: {time_until_arrival <= total_travel_hours}"
+            )
+
             # Leave when: time_until_arrival <= total_travel_hours
             # For free_drive: depart within one tick of the scheduled hour
             depart_threshold = (
                 total_travel_hours if stop_type == "destination" else tick_sim_hours
             )
             if time_until_arrival <= depart_threshold:
-                if stop_type == "free_drive":
-                    # Start free-driving (random walk) mode
-                    agent.free_driving = True
-                    agent.current_destination = None
-                    print(
-                        f"[{t}][{name}][STOPPED] Starting free drive until next scheduled stop"
-                    )
-                    self.set_next_state(STATE_DRIVING)
-                    return
-                elif needs_charge_detour:
+
+                if needs_charge_detour:
                     # Not enough energy — head to charger first
                     agent.current_cs_jid = None  # Let GoingToCharger pick the closest
                     # Remember where we actually need to go after charging
                     agent.current_destination = next_stop
+                    extra_time = detour_total_hours - travel_hours
                     print(
                         f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
-                        f"(need charging detour, +{detour_extra_hours:.1f}h). "
+                        f"(need charging detour, +{extra_time:.1f}h). "
                         f"Heading to charger first!"
                     )
                     self.set_next_state(STATE_GOING_TO_CHARGER)

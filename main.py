@@ -111,15 +111,15 @@ def build_ev_deployment(cs_stations):
                         "name": "Work",
                         "x": 15.0,
                         "y": 20.0,
-                        "hour": 13.0,
+                        "hour": 14.0,  # Changed from 13:00 to 14:00 to allow time for charging
                         "type": "destination",
                     },
                     {
-                        "name": "Free Drive",
-                        "x": 0.0,
-                        "y": 0.0,
+                        "name": "Gym",
+                        "x": 5.0,
+                        "y": 5.0,
                         "hour": 17.0,
-                        "type": "free_drive",
+                        "type": "destination",
                     },
                     {
                         "name": "Home",
@@ -171,15 +171,15 @@ def build_ev_deployment(cs_stations):
                         "name": "Office",
                         "x": -15.0,
                         "y": 15.0,
-                        "hour": 13.0,
+                        "hour": 14.0,  # Changed from 13:00 to 14:00 to allow time for charging
                         "type": "destination",
                     },
                     {
-                        "name": "Free Drive",
-                        "x": 0.0,
+                        "name": "Mall",
+                        "x": -5.0,
                         "y": 0.0,
                         "hour": 17.0,
-                        "type": "free_drive",
+                        "type": "destination",
                     },
                     {
                         "name": "Home",
