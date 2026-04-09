@@ -95,12 +95,16 @@ class GoingToChargerState(State):
             f"[{t}][{name}][GOING_TO_CHARGER] Arrived at {agent.current_cs_jid}. "
             "Requesting charge..."
         )
+        
+        # Use trip-specific target SoC if set, otherwise use default target_soc
+        target_soc_for_charge = getattr(agent, "_trip_target_soc", agent.target_soc)
+        
         await agent.messaging_service.send_charge_request(
             self,
             to_jid=agent.current_cs_jid,
             required_energy=required_energy_kwh(
                 agent.current_soc,
-                agent.target_soc,
+                target_soc_for_charge,
                 agent.battery_capacity_kwh,
             ),
             max_charging_rate=agent.max_charge_rate_kw,

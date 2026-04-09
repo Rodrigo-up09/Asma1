@@ -139,7 +139,7 @@ def build_ev_deployment(cs_stations):
             "web_port": 10002,
             "config": {
                 "battery_capacity_kwh": 40.0,
-                "current_soc": 0.30,
+                "current_soc": 0.60,  # Increased from 0.30 to 0.60 (60%)
                 "low_soc_threshold": 0.20,
                 "target_soc": 0.80,
                 "departure_time": "09:00",

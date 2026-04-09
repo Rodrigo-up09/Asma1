@@ -78,6 +78,15 @@ class StoppedState(State):
             # Travel time for the direct route
             travel_hours = _estimate_travel_hours(dist, agent.velocity, tick_sim_hours)
 
+            # Calculate time until arrival (needed for charging detour calculation)
+            now = clock.time_of_day
+            target_hour = next_stop["hour"]
+            if target_hour > now:
+                time_until_arrival = target_hour - now
+            else:
+                # Next stop is tomorrow (day wrap)
+                time_until_arrival = (24.0 - now) + target_hour
+
             # ── Energy prediction: do we need a charging detour? ──
             needs_charge_detour = False
             detour_total_hours = 0.0  # Initialize to 0
@@ -124,46 +133,104 @@ class StoppedState(State):
                             travel_cs_to_dest = _estimate_travel_hours(
                                 dist_cs_to_dest, agent.velocity, tick_sim_hours
                             )
-                            # Charging time: charge to target_soc (what actually happens)
+                            
+                            # Calculate energy consumption
                             energy_to_reach_cs = _estimate_energy_for_trip(
                                 dist_to_cs,
                                 agent.velocity,
                                 agent.energy_per_km,
                                 tick_sim_hours,
                             )
+                            energy_cs_to_dest = _estimate_energy_for_trip(
+                                dist_cs_to_dest,
+                                agent.velocity,
+                                agent.energy_per_km,
+                                tick_sim_hours,
+                            )
+                            
                             # SoC when arriving at CS
                             soc_at_cs = agent.current_soc - (energy_to_reach_cs / agent.battery_capacity_kwh)
-                            soc_at_cs = max(0.0, soc_at_cs)
                             
-                            # Charge from soc_at_cs to target_soc (this is what actually happens!)
-                            energy_to_charge = (agent.target_soc - soc_at_cs) * agent.battery_capacity_kwh
-                            
-                            if energy_to_charge > 0:
-                                charge_hours = energy_to_charge / agent.max_charge_rate_kw
+                            # Check if we can even reach the CS
+                            if soc_at_cs < 0:
+                                print(
+                                    f"[{t}][{name}][STOPPED] WARNING: Not enough battery to reach CS! "
+                                    f"Current: {agent.current_soc:.0%}, Need: {(energy_to_reach_cs / agent.battery_capacity_kwh):.0%}. "
+                                    f"Will try direct route (may run out of battery)."
+                                )
+                                needs_charge_detour = False
                             else:
-                                charge_hours = 0.0
-
-                            detour_total_hours = (
-                                travel_to_cs + charge_hours + travel_cs_to_dest
-                            )
+                                soc_at_cs = max(0.0, soc_at_cs)
+                                
+                                # Calculate available charging time
+                                # Time until destination - travel time to CS - travel time CS to dest
+                                available_charge_time = time_until_arrival - travel_to_cs - travel_cs_to_dest
+                                
+                                # Calculate minimum SoC needed to reach destination from CS
+                                min_soc_needed = soc_at_cs + (energy_cs_to_dest / agent.battery_capacity_kwh) + agent.low_soc_threshold
+                                min_soc_needed = min(1.0, min_soc_needed)
+                                
+                                if available_charge_time <= 0:
+                                    # Already late - charge minimum needed and leave ASAP
+                                    print(
+                                        f"[{t}][{name}][STOPPED] WARNING: Already late! "
+                                        f"Charging minimum needed ({min_soc_needed:.0%}) and leaving immediately."
+                                    )
+                                    trip_target_soc = min_soc_needed
+                                    energy_to_charge = (trip_target_soc - soc_at_cs) * agent.battery_capacity_kwh
+                                    charge_hours = energy_to_charge / agent.max_charge_rate_kw if energy_to_charge > 0 else 0.0
+                                else:
+                                    # Calculate maximum SoC we can reach with available time
+                                    max_energy_can_charge = available_charge_time * agent.max_charge_rate_kw
+                                    max_soc_can_reach = soc_at_cs + (max_energy_can_charge / agent.battery_capacity_kwh)
+                                    max_soc_can_reach = min(1.0, max_soc_can_reach)  # Cap at 100%
+                                    
+                                    # Determine target SoC for this trip
+                                    # Ideally charge to 100%, but limited by available time
+                                    trip_target_soc = max_soc_can_reach
+                                    
+                                    if trip_target_soc < min_soc_needed:
+                                        # Can't charge enough to reach destination on time
+                                        print(
+                                            f"[{t}][{name}][STOPPED] WARNING: Not enough time to charge sufficiently! "
+                                            f"Need {min_soc_needed:.0%} but can only reach {trip_target_soc:.0%}"
+                                        )
+                                        trip_target_soc = min_soc_needed  # Charge minimum needed (will be late)
+                                    
+                                    # Calculate actual charging time
+                                    energy_to_charge = (trip_target_soc - soc_at_cs) * agent.battery_capacity_kwh
+                                    if energy_to_charge > 0:
+                                        charge_hours = energy_to_charge / agent.max_charge_rate_kw
+                                    else:
+                                        charge_hours = 0.0
                             
-                            # Debug output
-                            print(
-                                f"[{t}][{name}][STOPPED] Charging detour calculation:\n"
-                                f"  Current SoC: {agent.current_soc:.0%} ({current_energy:.1f} kWh)\n"
-                                f"  Distance home→dest: {dist:.1f} units (direct)\n"
-                                f"  Distance home→CS: {dist_to_cs:.1f} units\n"
-                                f"  Distance CS→dest: {dist_cs_to_dest:.1f} units\n"
-                                f"  Energy to reach CS: {energy_to_reach_cs:.1f} kWh\n"
-                                f"  SoC at CS: {soc_at_cs:.0%}\n"
-                                f"  Target SoC: {agent.target_soc:.0%}\n"
-                                f"  Energy to charge: {energy_to_charge:.1f} kWh\n"
-                                f"  Charge time: {charge_hours:.2f} hours\n"
-                                f"  Travel home→CS: {travel_to_cs:.2f} hours\n"
-                                f"  Travel CS→dest: {travel_cs_to_dest:.2f} hours\n"
-                                f"  Total detour time: {detour_total_hours:.2f} hours\n"
-                                f"  Direct travel time: {travel_hours:.2f} hours"
-                            )
+                                # Store the target SoC for this trip (used by charging state)
+                                agent._trip_target_soc = trip_target_soc
+
+                                detour_total_hours = (
+                                    travel_to_cs + charge_hours + travel_cs_to_dest
+                                )
+                                
+                                # Debug output
+                                print(
+                                    f"[{t}][{name}][STOPPED] Charging detour calculation:\n"
+                                    f"  Current SoC: {agent.current_soc:.0%} ({current_energy:.1f} kWh)\n"
+                                    f"  Distance home→dest: {dist:.1f} units (direct)\n"
+                                    f"  Distance home→CS: {dist_to_cs:.1f} units\n"
+                                    f"  Distance CS→dest: {dist_cs_to_dest:.1f} units\n"
+                                    f"  Energy to reach CS: {energy_to_reach_cs:.1f} kWh\n"
+                                    f"  SoC at CS: {soc_at_cs:.0%}\n"
+                                    f"  Time available for charging: {available_charge_time:.2f} hours\n"
+                                    f"  Max SoC can reach: {max_soc_can_reach:.0%}\n"
+                                    f"  Min SoC needed: {min_soc_needed:.0%}\n"
+                                    f"  Trip target SoC: {trip_target_soc:.0%}\n"
+                                    f"  Energy to charge: {energy_to_charge:.1f} kWh\n"
+                                    f"  Charge time: {charge_hours:.2f} hours\n"
+                                    f"  Travel home→CS: {travel_to_cs:.2f} hours\n"
+                                    f"  Travel CS→dest: {travel_cs_to_dest:.2f} hours\n"
+                                    f"  Total detour time: {detour_total_hours:.2f} hours\n"
+                                    f"  Direct travel time: {travel_hours:.2f} hours"
+                                )
                         else:
                             # CS not found in list - can't calculate detour
                             print(f"[{t}][{name}][STOPPED] WARNING: CS {cs_jid} not in station list, can't plan detour!")
@@ -175,15 +242,6 @@ class StoppedState(State):
 
             # Total time needed: use detour time if charging is needed, otherwise direct route
             total_travel_hours = detour_total_hours if needs_charge_detour else travel_hours
-
-            now = clock.time_of_day
-            target_hour = next_stop["hour"]
-            # Time remaining until the next stop's scheduled arrival hour
-            if target_hour > now:
-                time_until_arrival = target_hour - now
-            else:
-                # Next stop is tomorrow (day wrap)
-                time_until_arrival = (24.0 - now) + target_hour
 
             # Debug: show departure calculation
             print(

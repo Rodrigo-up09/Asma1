@@ -37,13 +37,16 @@ class ChargingState(State):
         # Accumulate kWh for this session
         agent._session_kwh = getattr(agent, "_session_kwh", 0.0) + energy_added
 
+        # Use trip-specific target SoC if set, otherwise use default target_soc
+        target_soc_for_charge = getattr(agent, "_trip_target_soc", agent.target_soc)
+
         print(
             f"[{t}][{name}][CHARGING] SoC: {agent.current_soc:.0%} "
-            f"(+{energy_added:.1f} kWh)"
+            f"(+{energy_added:.1f} kWh) | Target: {target_soc_for_charge:.0%}"
         )
 
-        if agent.current_soc >= agent.target_soc:
-            print(f"[{t}][{name}][CHARGING] Fully charged! Resuming driving.")
+        if agent.current_soc >= target_soc_for_charge:
+            print(f"[{t}][{name}][CHARGING] Charged to target! Resuming driving.")
 
             # ── metric: charging session complete ──
             session_kwh = agent._session_kwh
@@ -59,6 +62,10 @@ class ChargingState(State):
                 },
             )
             agent._session_kwh = 0.0
+            
+            # Clear trip-specific target SoC
+            if hasattr(agent, "_trip_target_soc"):
+                delattr(agent, "_trip_target_soc")
 
             await agent.messaging_service.send_charge_complete(
                 self,
