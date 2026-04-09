@@ -32,11 +32,15 @@ class CSMessagingService:
     def parse_request(self, msg: Any, default_max_charging_rate: float) -> Optional[Dict[str, Any]]:
         try:
             data = json.loads(msg.body)
-            return {
+            result = {
                 "ev_jid": str(msg.sender).split("/")[0],
                 "required_energy": float(data.get("required_energy", 0)),
                 "max_charging_rate": float(data.get("max_charging_rate", default_max_charging_rate)),
             }
+            # Optional: arriving time (in simulation hours)
+            if "arriving_hours" in data:
+                result["arriving_hours"] = float(data["arriving_hours"])
+            return result
         except (json.JSONDecodeError, ValueError, AttributeError):
             return None
 
@@ -47,6 +51,20 @@ class CSMessagingService:
             ev_jid = str(msg.sender).split("/")[0]
             return ev_jid, status
         except (json.JSONDecodeError, AttributeError, TypeError):
+            return None
+
+    def parse_proposal_confirm(self, msg: Any) -> Optional[Tuple[str, bool]]:
+        """Parse EV's confirmation of proposal (accept/reject).
+        
+        Returns:
+            Tuple of (ev_jid, accepted) where accepted is True/False
+        """
+        try:
+            data = json.loads(msg.body)
+            ev_jid = str(msg.sender).split("/")[0]
+            accepted = bool(data.get("accepted", False))
+            return ev_jid, accepted
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
             return None
 
     def parse_world_update(self, msg: Any) -> Optional[Dict[str, float]]:

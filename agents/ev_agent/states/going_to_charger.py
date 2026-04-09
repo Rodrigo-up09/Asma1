@@ -4,8 +4,10 @@ import math
 from spade.behaviour import State
 
 from ..utils import (
+    calculate_arrival_time_hours,
     closest_station,
     get_station_position,
+    handle_cs_proposal,
     move_towards,
     required_energy_kwh,
 )
@@ -99,6 +101,16 @@ class GoingToChargerState(State):
         # Use trip-specific target SoC if set, otherwise use default target_soc
         target_soc_for_charge = getattr(agent, "_trip_target_soc", agent.target_soc)
         
+        # Calculate arrival time
+        cs_pos = get_station_position(agent.cs_stations, agent.current_cs_jid)
+        arriving_hours = calculate_arrival_time_hours(
+            agent.x,
+            agent.y,
+            cs_pos,
+            agent.velocity,
+            agent.world_clock,
+        )
+        
         await agent.messaging_service.send_charge_request(
             self,
             to_jid=agent.current_cs_jid,
@@ -108,6 +120,7 @@ class GoingToChargerState(State):
                 agent.battery_capacity_kwh,
             ),
             max_charging_rate=agent.max_charge_rate_kw,
+            arriving_hours=arriving_hours,
         )
 
         reply = await self.receive(timeout=10)
@@ -131,11 +144,27 @@ class GoingToChargerState(State):
             self.set_next_state(STATE_GOING_TO_CHARGER)
             return
 
+        # Confirm proposal with CS
+        confirmed, decision_msg = await handle_cs_proposal(
+            self,
+            agent,
+            response_data,
+            agent.current_cs_jid,
+        )
+        
+        if not confirmed:
+            print(f"[{t}][{name}][GOING_TO_CHARGER] {decision_msg}. Retrying in 3s...")
+            await asyncio.sleep(3)
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return
+        
+        print(f"[{t}][{name}][GOING_TO_CHARGER] {decision_msg}")
+
         status = response_data.get("status")
         waiting_time = response_data.get("estimated_wait_minutes")
 
         if status == "accept":
-            print(f"[{t}][{name}][GOING_TO_CHARGER] Accepted by CS. Starting charge.")
+            print(f"[{t}][{name}][GOING_TO_CHARGER] Entering charge session.")
             # Mark queue-entry time = now (not queued, but reuse the same field
             # so ChargingState can record a zero wait if needed)
             agent._queue_entry_time = asyncio.get_event_loop().time()
@@ -145,7 +174,7 @@ class GoingToChargerState(State):
 
         if status == "wait":
             print(
-                f"[{t}][{name}][GOING_TO_CHARGER] CS is full. Waiting in queue. "
+                f"[{t}][{name}][GOING_TO_CHARGER] Waiting in queue. "
                 f"Estimated wait time: {waiting_time} minutes."
             )
             agent._queue_entry_time = asyncio.get_event_loop().time()

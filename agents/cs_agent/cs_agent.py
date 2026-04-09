@@ -83,6 +83,8 @@ class CSAgent(Agent):
         self.used_doors = 0
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
+        self.incoming_requests = {}  # EV JID -> {arriving_hours, required_energy, max_rate}
+        self.pending_proposals = {}  # EV JID -> {proposal_data, decision} awaiting confirmation
         self.messaging_service = CSMessagingService()
         self.world_clock = None
         self._last_solar_update_sim_hours = None
@@ -142,6 +144,9 @@ class CSAgent(Agent):
         self.used_doors += 1
         if self.actual_solar_capacity >= request["required_energy"]:
             self.actual_solar_capacity -= request["required_energy"]
+        
+        # Remove from incoming requests (charging now, not incoming anymore)
+        self.incoming_requests.pop(ev_jid, None)
         
         # Calculate price with current solar discount
         discount = self.solar_discount()
