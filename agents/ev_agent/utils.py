@@ -31,6 +31,69 @@ def calculate_arrival_time_hours(
     distance = math.hypot(cs_pos["x"] - ev_x, cs_pos["y"] - ev_y)
     time_to_arrive_hours = distance / velocity if velocity > 0 else 0.0
     return world_clock.sim_hours + time_to_arrive_hours
+def apply_energy_drain(
+    current_soc: float,
+    energy_per_km: float,
+    velocity: float,
+    sim_hours_elapsed: float,
+    battery_capacity_kwh: float,
+) -> Tuple[float, float]:
+    """Apply energy drain during travel.
+    
+    Args:
+        current_soc: Current SoC (0.0 to 1.0)
+        energy_per_km: kWh per km
+        velocity: Units per simulation hour
+        sim_hours_elapsed: Simulation hours that passed
+        battery_capacity_kwh: Battery capacity in kWh
+        
+    Returns:
+        Tuple of (new_soc, energy_used_kwh)
+    """
+    drain_kw = energy_per_km * velocity
+    energy_used = drain_kw * sim_hours_elapsed
+    soc_drop = energy_used / battery_capacity_kwh
+    new_soc = max(0.0, current_soc - soc_drop)
+    return new_soc, energy_used
+
+
+
+def calculate_energy_consumed(
+    energy_per_km: float,
+    velocity: float,
+    sim_hours_elapsed: float,
+) -> float:
+    """Calculate energy consumed during travel.
+    
+    Args:
+        energy_per_km: kWh per km
+        velocity: Units per simulation hour
+        sim_hours_elapsed: Simulation hours that passed
+        
+    Returns:
+        Energy consumed in kWh
+    """
+    drain_kw = energy_per_km * velocity
+    return drain_kw * sim_hours_elapsed
+
+
+def update_soc_after_travel(
+    current_soc: float,
+    energy_consumed_kwh: float,
+    battery_capacity_kwh: float,
+) -> float:
+    """Update State of Charge after energy consumption.
+    
+    Args:
+        current_soc: Current SoC (0.0 to 1.0)
+        energy_consumed_kwh: Energy consumed in kWh
+        battery_capacity_kwh: Battery capacity in kWh
+        
+    Returns:
+        New SoC (0.0 to 1.0)
+    """
+    soc_drop = energy_consumed_kwh / battery_capacity_kwh
+    return max(0.0, current_soc - soc_drop)
 
 
 async def handle_cs_proposal(
@@ -103,3 +166,77 @@ def move_towards(x: float, y: float, target_x: float, target_y: float, max_step:
     new_y = y + ((target_y - y) / distance) * step
     remaining_distance = math.hypot(target_x - new_x, target_y - new_y)
     return new_x, new_y, remaining_distance
+
+
+def closest_station(ev_x: float, ev_y: float, cs_stations: Dict[str, Any]) -> Tuple[Optional[str], float]:
+    """Find closest charging station.
+    
+    Args:
+        ev_x: EV x position
+        ev_y: EV y position
+        cs_stations: Dict of charging stations {jid: {x, y, ...}}
+        
+    Returns:
+        Tuple of (closest_jid, distance) or (None, float('inf')) if no stations
+    """
+    min_dist = float("inf")
+    closest_jid = None
+    for jid, pos in cs_stations.items():
+        dist = math.hypot(pos["x"] - ev_x, pos["y"] - ev_y)
+        if dist < min_dist:
+            min_dist = dist
+            closest_jid = jid
+    return closest_jid, min_dist
+
+
+def get_station_position(cs_stations: Dict[str, Any], jid: str) -> Optional[Dict[str, float]]:
+    """Get position of a charging station.
+    
+    Args:
+        cs_stations: Dict of charging stations {jid: {x, y, ...}}
+        jid: Charging station JID
+        
+    Returns:
+        Position dict {x, y} or None if not found
+    """
+    return cs_stations.get(jid)
+
+
+def move_towards(
+    current_x: float,
+    current_y: float,
+    target_x: float,
+    target_y: float,
+    velocity: float,
+) -> Tuple[float, float, float]:
+    """Move towards target position.
+    
+    Args:
+        current_x: Current x position
+        current_y: Current y position
+        target_x: Target x position
+        target_y: Target y position
+        velocity: Velocity (units per sim hour)
+        
+    Returns:
+        Tuple of (new_x, new_y, remaining_distance)
+    """
+    dx = target_x - current_x
+    dy = target_y - current_y
+    dist = math.hypot(dx, dy)
+    
+    if dist == 0:
+        return current_x, current_y, 0.0
+    
+    # Move velocity units towards target (assuming 1 frame = 1 unit of time)
+    move_distance = velocity
+    if move_distance >= dist:
+        return target_x, target_y, 0.0
+    
+    # Partial move
+    ratio = move_distance / dist
+    new_x = current_x + dx * ratio
+    new_y = current_y + dy * ratio
+    new_dist = dist - move_distance
+    
+    return new_x, new_y, new_dist
