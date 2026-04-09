@@ -13,7 +13,7 @@ from typing import Any, Dict
 class WorldState:
     electricity_price: float = 0.15
     grid_load: float = 0.4
-    renewable_available: bool = False
+    solar_production_rate: float = 0.0
 
 
 class WorldModel:
@@ -45,16 +45,16 @@ class WorldModel:
         dict with keys:
             electricity_price   (float, €/kWh)
             grid_load           (float, 0–1 normalised)
-            renewable_available (bool)
+            solar_production_rate (float, kW)
         """
         self._state.electricity_price = self._calc_electricity_price(hour)
         self._state.grid_load = self._calc_grid_load(hour)
-        self._state.renewable_available = self._calc_renewable(hour)
+        self._state.solar_production_rate = self._calc_solar_production_rate(hour)
 
         return {
             "electricity_price": self._state.electricity_price,
             "grid_load": self._state.grid_load,
-            "renewable_available": self._state.renewable_available,
+            "solar_production_rate": self._state.solar_production_rate,
         }
 
     @property
@@ -96,6 +96,19 @@ class WorldModel:
         return 0.40
 
     @staticmethod
-    def _calc_renewable(hour: float) -> bool:
-        """Solar window: 10:00 – 16:00."""
-        return 10 <= hour < 16
+    def _calc_solar_production_rate(hour: float) -> float:
+        """Simulate a simple solar production curve in kW.
+
+        - Zero production between 20:00 and 05:00.
+        - High production between 12:00 and 15:00.
+        - Shoulder periods around sunrise/sunset.
+        """
+        if hour >= 20 or hour < 5:
+            return 0.0
+        if 12 <= hour < 15:
+            return 18.0
+        if 10 <= hour < 12 or 15 <= hour < 17:
+            return 12.0
+        if 5 <= hour < 10 or 17 <= hour < 20:
+            return 4.0
+        return 0.0

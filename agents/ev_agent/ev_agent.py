@@ -36,12 +36,19 @@ class WorldUpdateBehaviour(CyclicBehaviour):
             return
 
         self.agent.electricity_price = data.get(
-            "electricity_price", self.agent.electricity_price
+            "electricity_price",
+            data.get("energy_price", self.agent.electricity_price),
         )
         self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
-        self.agent.renewable_available = data.get(
-            "renewable_available", self.agent.renewable_available
-        )
+        if "solar_production_rate" in data:
+            try:
+                self.agent.renewable_available = float(data["solar_production_rate"]) > 0.0
+            except (TypeError, ValueError):
+                pass
+        else:
+            self.agent.renewable_available = data.get(
+                "renewable_available", self.agent.renewable_available
+            )
 
 
 class EVAgent(Agent):

@@ -14,6 +14,7 @@ This file is only the SPADE agent that drives and distributes that logic.
 
 import json
 import asyncio
+import time
 from typing import List
 
 from spade.agent import Agent
@@ -30,34 +31,87 @@ from environment.world_clock import WorldClock
 # ══════════════════════════════════════════════════════════════════════
 
 class BroadcastBehaviour(PeriodicBehaviour):
-    """Every 2 real seconds: update the world model and push state to all agents."""
+    """Every 2 real seconds: update world state; broadcast only on change or heartbeat."""
+
+    WORLD_UPDATE_ENERGY_PRICE = "energy-price-update"
+    WORLD_UPDATE_SOLAR_RATE = "solar-production-rate-update"
+    HEARTBEAT_SECONDS = 30.0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._last_state = None
+        self._last_heartbeat_at = 0.0
+        self._tick_id = 0
 
     async def run(self) -> None:
         agent = self.agent
         hour: float = agent.world_clock.current_hour()
         state: dict = agent.world_model.update(hour)
+        self._tick_id += 1
 
-        payload = {
+        previous = self._last_state or {}
+        price_changed = previous.get("electricity_price") != state["electricity_price"]
+        solar_changed = previous.get("solar_production_rate") != state["solar_production_rate"]
+        grid_changed = previous.get("grid_load") != state["grid_load"]
+
+        now = time.monotonic()
+        heartbeat_due = (now - self._last_heartbeat_at) >= self.HEARTBEAT_SECONDS
+
+        send_price = price_changed or heartbeat_due
+        send_solar = solar_changed or grid_changed or heartbeat_due
+
+        if not (send_price or send_solar):
+            return
+
+        price_payload = {
+            "type": self.WORLD_UPDATE_ENERGY_PRICE,
+            "energy_price": state["electricity_price"],
+            # Compatibility for agents that still read the legacy key.
             "electricity_price": state["electricity_price"],
+            "tick_id": self._tick_id,
+            "timestamp": agent.world_clock.formatted_time(),
+        }
+        solar_payload = {
+            "type": self.WORLD_UPDATE_SOLAR_RATE,
+            "solar_production_rate": state["solar_production_rate"],
             "grid_load": state["grid_load"],
-            "renewable_available": state["renewable_available"],
+            # Compatibility for agents that still rely on the old boolean.
+            "renewable_available": state["solar_production_rate"] > 0.0,
+            "tick_id": self._tick_id,
             "timestamp": agent.world_clock.formatted_time(),
         }
 
         for jid in agent.agent_jids:
-            msg = Message(to=str(jid))
-            msg.set_metadata("protocol", "world-update")
-            msg.set_metadata("performative", "inform")
-            msg.body = json.dumps(payload)
-            await self.send(msg)
+            payloads = []
+            if send_price:
+                payloads.append(price_payload)
+            if send_solar:
+                payloads.append(solar_payload)
 
-        t = payload["timestamp"]
-        price = payload["electricity_price"]
-        load = payload["grid_load"]
-        renew = payload["renewable_available"]
+            for payload in payloads:
+                msg = Message(to=str(jid))
+                msg.set_metadata("protocol", "world-update")
+                msg.set_metadata("performative", "inform")
+                msg.body = json.dumps(payload)
+                await self.send(msg)
+
+        self._last_state = {
+            "electricity_price": state["electricity_price"],
+            "solar_production_rate": state["solar_production_rate"],
+            "grid_load": state["grid_load"],
+        }
+        if heartbeat_due:
+            self._last_heartbeat_at = now
+
+        t = price_payload["timestamp"]
+        price = price_payload["energy_price"]
+        load = solar_payload["grid_load"]
+        solar = solar_payload["solar_production_rate"]
+        reason = "heartbeat" if heartbeat_due else "change"
         print(
             f"[{t}][WorldAgent] Broadcast → "
-            f"price={price:.2f} €/kWh | load={load:.0%} | renewable={renew}"
+            f"tick={self._tick_id} | reason={reason} | "
+            f"price={price:.2f} €/kWh | load={load:.0%} | solar={solar:.2f} kW"
         )
 
 
@@ -199,3 +253,7 @@ class WorldAgent(Agent):
 
         # Behaviour 3 — print metrics every 10 s
         self.add_behaviour(MetricsPrinterBehaviour(period=10))
+        
+        
+        
+# TODO Estação ter info da lista de carros a chegar
