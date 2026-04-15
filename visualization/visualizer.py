@@ -235,37 +235,27 @@ class WorldVisualizer:
             for i, ev in enumerate(self.ev_agents):
                 self._draw_ev(screen, font, ev)
 
-            # Draw target markers for each EV
-            for i, ev in enumerate(self.ev_agents):
+            # Draw building markers (one per unique location)
+            buildings_seen = set()
+            for ev in self.ev_agents:
                 if hasattr(ev, "schedule") and ev.schedule:
-                    colour = TARGET_COLOURS[i % len(TARGET_COLOURS)]
-                    ev_name = str(ev.jid).split("@")[0]
-                    # Group stops by (name, x, y) so shared locations show all times
-                    grouped = {}
                     for stop in ev.schedule:
                         key = (stop["name"], stop["x"], stop["y"])
-                        grouped.setdefault(key, []).append(stop["hour"])
-
-                    for (name, wx, wy), hours in grouped.items():
-                        tx, ty = self.world_to_screen(wx, wy)
-                        # Diamond marker
-                        diamond = [
-                            (tx, ty - 7),
-                            (tx + 5, ty),
-                            (tx, ty + 7),
-                            (tx - 5, ty),
-                        ]
-                        pygame.draw.polygon(screen, colour, diamond)
-                        pygame.draw.polygon(screen, WHITE, diamond, 1)
-                        times_str = ", ".join(
-                            f"{int(h):02d}:{int((h % 1) * 60):02d}" for h in hours
-                        )
-                        label = font.render(
-                            f"{name} ({ev_name}) {times_str}",
-                            True,
-                            colour,
-                        )
-                        screen.blit(label, (tx + 8, ty - 7))
+                        if key not in buildings_seen:
+                            buildings_seen.add(key)
+                            name, wx, wy = key
+                            tx, ty = self.world_to_screen(wx, wy)
+                            diamond = [
+                                (tx, ty - 7),
+                                (tx + 5, ty),
+                                (tx, ty + 7),
+                                (tx - 5, ty),
+                            ]
+                            bld_colour = (180, 180, 220)
+                            pygame.draw.polygon(screen, bld_colour, diamond)
+                            pygame.draw.polygon(screen, WHITE, diamond, 1)
+                            label = font.render(name, True, bld_colour)
+                            screen.blit(label, (tx + 8, ty - 7))
 
             self._draw_legend(screen, font)
 
