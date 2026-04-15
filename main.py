@@ -4,9 +4,11 @@ import random
 import spade
 from agents.cs_agent import CSAgent, CSConfig
 from agents.ev_agent import EVAgent
+from agents.ev_agent.utils import set_cs_selection_weights
 from agents.world_agent import WorldAgent
 from environment.world_clock import WorldClock
 from visualization.visualizer import WorldVisualizer
+from scenarios import display_menu, SCENARIOS
 
 # ══════════════════════════════════════════════════════════════════════
 #  ✏️  CHANGE THESE TWO NUMBERS TO SCALE THE SIMULATION
@@ -29,7 +31,7 @@ _CS_PORT_BASE = 10001          # cs1 → 10001, cs2 → 10002, …
 _EV_PORT_BASE = _CS_PORT_BASE + NUM_CSS  # ev1 → 10001+NUM_CSS, ev2 → …
 
 # Map area (agents and schedule destinations are placed inside this box)
-MAP_MIN, MAP_MAX = -25.0, 25.0
+MAP_MIN, MAP_MAX = -30.0, 30.0
 
 # ══════════════════════════════════════════════════════════════════════
 #  Random-parameter ranges  (tweak as needed)
@@ -96,16 +98,25 @@ def _rand_pos():
     return _rand(MAP_MIN, MAP_MAX), _rand(MAP_MIN, MAP_MAX)
 
 
-def _generate_schedule(home_x, home_y, num_stops=4, night=False):
-    """Build a day or night schedule from global buildings.
-
-    Day  schedule: stops spread between ~07:30 and 20:00.
-    Night schedule: stops spread between ~20:00 and 06:00 (next day).
-    The last stop is always "Home".
+def _generate_schedule(home_x, home_y, num_destinations=3, night=False):
+    """Build a schedule with random selection from established world points.
+    
+    Each EV gets num_destinations random points from the fixed world locations
+    plus returns home at the end.
+    
+    Args:
+        home_x: Home x position
+        home_y: Home y position
+        num_destinations: Number of destinations to visit (default 3)
+        night: If True, use night buildings; otherwise day buildings
     """
     buildings = NIGHT_BUILDINGS if night else DAY_BUILDINGS
-    chosen = random.sample(buildings, min(num_stops - 1, len(buildings)))
-
+    
+    # Select random destinations from established world points
+    num_to_pick = min(num_destinations, len(buildings))
+    chosen = random.sample(buildings, num_to_pick)
+    
+    # Calculate time windows
     if night:
         start_hour = random.uniform(20.0, 21.5)
         end_hour = random.uniform(5.0, 7.0)
@@ -115,7 +126,10 @@ def _generate_schedule(home_x, home_y, num_stops=4, night=False):
         end_hour = 20.0
         total_span = end_hour - start_hour
 
+    # Distribute stops evenly across the time window
+    num_stops = num_to_pick + 1  # destinations + home
     gap = total_span / num_stops
+    
     stops = []
     for i, bld in enumerate(chosen):
         hour = start_hour + gap * i
@@ -130,7 +144,8 @@ def _generate_schedule(home_x, home_y, num_stops=4, night=False):
                 "type": "destination",
             }
         )
-    # final stop → Home
+    
+    # Final stop → Home
     stops.append(
         {
             "name": "Home",
@@ -140,8 +155,8 @@ def _generate_schedule(home_x, home_y, num_stops=4, night=False):
             "type": "destination",
         }
     )
-    # Sort by hour so the agent's next_target() logic works correctly.
-    # For night schedules this puts early-morning stops after evening ones.
+    
+    # Sort by hour so the agent's next_target() logic works correctly
     stops.sort(key=lambda s: s["hour"])
     return stops
 
@@ -182,6 +197,8 @@ def generate_ev_deployment(n: int, cs_stations: list[dict]) -> list[dict]:
     A fraction (NIGHT_DRIVER_RATIO) of the EVs are randomly assigned as
     night drivers, getting schedules that span ~20:00–06:00 instead of the
     default daytime window.
+    
+    Each EV gets 3 random destinations from established world points plus home.
     """
     # Decide which indices are night drivers
     num_night = max(0, round(n * NIGHT_DRIVER_RATIO))
@@ -191,7 +208,7 @@ def generate_ev_deployment(n: int, cs_stations: list[dict]) -> list[dict]:
     for i in range(1, n + 1):
         is_night = (i - 1) in night_indices
         home_x, home_y = _rand_pos()
-        num_stops = random.randint(3, 5)
+        num_destinations = 3  # Each EV visits 3 established world points
 
         if is_night:
             departure = f"{random.randint(19, 21):02d}:00"  # leave in the evening
@@ -221,7 +238,7 @@ def generate_ev_deployment(n: int, cs_stations: list[dict]) -> list[dict]:
                     "grid_load": 0.5,
                     "renewable_available": False,
                     "schedule": _generate_schedule(
-                        home_x, home_y, num_stops, night=is_night
+                        home_x, home_y, num_destinations, night=is_night
                     ),
                     "world_jid": WORLD_JID,
                 },
@@ -235,12 +252,36 @@ def generate_ev_deployment(n: int, cs_stations: list[dict]) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _build_active_cs_stations(cs_deployment):
-    return [
-        {"jid": cs["jid"], "x": cs["config"]["x"], "y": cs["config"]["y"]}
-        for cs in cs_deployment
-        if cs.get("enabled", True)
-    ]
+def _build_active_cs_stations(cs_deployment, active_cs_agents=None):
+    """Build CS station list for EV selection.
+    
+    If active_cs_agents provided, includes current load data for informed CS selection.
+    Otherwise, includes static configuration.
+    """
+    stations = []
+    for cs in cs_deployment:
+        if not cs.get("enabled", True):
+            continue
+        
+        station_info = {
+            "jid": cs["jid"],
+            "x": cs["config"]["x"],
+            "y": cs["config"]["y"],
+            "electricity_price": cs["config"].get("energy_price", 0.15),
+            "num_doors": cs["config"].get("num_doors", 2),
+            "used_doors": 0,  # Will be updated with live data if agents provided
+        }
+        
+        # If we have active agents, get live load data
+        if active_cs_agents:
+            for agent in active_cs_agents:
+                if agent.jid.bare == cs["jid"]:
+                    station_info["used_doors"] = agent.used_doors
+                    break
+        
+        stations.append(station_info)
+    
+    return stations
 
 
 def _collect_active_jids(cs_deployment, ev_deployment) -> list:
@@ -255,19 +296,99 @@ def _collect_active_jids(cs_deployment, ev_deployment) -> list:
     return jids
 
 
+def _generate_scenario_cs_deployment(scenario) -> list[dict]:
+    """Create CS deployment from scenario configuration."""
+    deployment = []
+    for i, cs_config_dict in enumerate(scenario.cs_configs, 1):
+        config = cs_config_dict["config"]
+        deployment.append(
+            {
+                "enabled": True,
+                "jid": cs_config_dict["jid"],
+                "password": cs_config_dict["password"],
+                "web_port": _CS_PORT_BASE + (i - 1),
+                "config": {
+                    "num_doors": config.num_doors,
+                    "max_charging_rate": config.max_charging_rate,
+                    "max_solar_capacity": config.max_solar_capacity,
+                    "actual_solar_capacity": config.actual_solar_capacity,
+                    "energy_price": config.energy_price,
+                    "solar_production_rate": config.solar_production_rate,
+                    "x": config.x,
+                    "y": config.y,
+                    "world_jid": WORLD_JID,
+                },
+            }
+        )
+    return deployment
+
+
+def _generate_scenario_ev_deployment(scenario, cs_stations) -> list[dict]:
+    """Create EV deployment from scenario configuration."""
+    deployment = []
+    for i, ev_config_dict in enumerate(scenario.ev_configs, 1):
+        config = ev_config_dict["config"]
+        deployment.append(
+            {
+                "enabled": True,
+                "jid": ev_config_dict["jid"],
+                "password": ev_config_dict["password"],
+                "web_port": _EV_PORT_BASE + (i - 1),
+                "night_driver": config.get("is_night_driver", False),
+                "config": {
+                    "battery_capacity_kwh": config["battery_capacity_kwh"],
+                    "current_soc": config["current_soc"],
+                    "low_soc_threshold": EV_LOW_SOC_THRESHOLD,
+                    "target_soc": config.get("target_soc", EV_TARGET_SOC),
+                    "departure_time": "08:00",  # Not used in scenarios, but keeping for compatibility
+                    "max_charge_rate_kw": config["max_charge_rate_kw"],
+                    "velocity": config["velocity"],
+                    "energy_per_km": config["energy_per_km"],
+                    "x": config["x"],
+                    "y": config["y"],
+                    "cs_stations": cs_stations,
+                    "electricity_price": 0.15,
+                    "grid_load": 0.5,
+                    "renewable_available": False,
+                    "schedule": config.get("schedule", []),
+                    "world_jid": WORLD_JID,
+                },
+            }
+        )
+    return deployment
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Entry point
 # ══════════════════════════════════════════════════════════════════════
 
 
 async def main():
-    # ── Shared clock ─────────────────────────────────────────────────
-    world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
-
-    # ── Generate deployments ─────────────────────────────────────────
-    cs_deployment = generate_cs_deployment(NUM_CSS)
-    cs_stations = _build_active_cs_stations(cs_deployment)
-    ev_deployment = generate_ev_deployment(NUM_EVS, cs_stations)
+    # ── Configure EV CS selection strategy: prefer available stations ──
+    set_cs_selection_weights(distance=0.5, price=0.5, load=1)
+    
+    # ── Show scenario menu ───────────────────────────────────────────
+    selected_scenario = display_menu()
+    
+    if selected_scenario:
+        # ── Use preset scenario ──────────────────────────────────────
+        print(f"\n📋 Loaded scenario: {selected_scenario.name}")
+        print(f"   {selected_scenario.description}\n")
+        
+        world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
+        cs_deployment = _generate_scenario_cs_deployment(selected_scenario)
+        cs_stations = _build_active_cs_stations(cs_deployment)
+        ev_deployment = _generate_scenario_ev_deployment(selected_scenario, cs_stations)
+    else:
+        # ── Use default random simulation ────────────────────────────
+        print(f"\n🎲 Using default random simulation\n")
+        
+        world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
+        
+        # ── Generate deployments ─────────────────────────────────────
+        cs_deployment = generate_cs_deployment(NUM_CSS)
+        cs_stations = _build_active_cs_stations(cs_deployment)
+        ev_deployment = generate_ev_deployment(NUM_EVS, cs_stations)
 
     active_cs_agents = []
     active_ev_agents = []
@@ -349,6 +470,11 @@ async def main():
 
     while not viz._stop_event.is_set():
         try:
+            # Update CS station data with current load for informed EV selection
+            updated_cs_stations = _build_active_cs_stations(cs_deployment, active_cs_agents)
+            for ev_agent in active_ev_agents:
+                ev_agent.cs_stations = updated_cs_stations
+            
             await asyncio.sleep(0.5)
         except KeyboardInterrupt:
             viz.stop()

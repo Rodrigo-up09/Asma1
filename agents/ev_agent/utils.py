@@ -1,6 +1,36 @@
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+# ──────────────────────────────────────────────────────────────────
+#  CS Selection Weights (configurable for testing different strategies)
+# ──────────────────────────────────────────────────────────────────
+# These weights control how much each factor influences CS selection:
+# - WEIGHT_DISTANCE: Preference based on proximity (0=ignore, 1=equal weight)
+# - WEIGHT_PRICE: Preference based on low cost (0=ignore, 1=equal weight)  
+# - WEIGHT_LOAD: Preference based on availability (0=ignore, 1=equal weight)
+#
+# The EV scores each CS and picks the one with the lowest score.
+# Adjust these to test different scenarios.
+
+CS_SELECTION_WEIGHTS = {
+    "distance": 1.0,  # Weight for distance (lower distance = better)
+    "price": 1.0,     # Weight for price (lower price = better)
+    "load": 1.0,      # Weight for load (less full = better, i.e., lower utilization)
+}
+
+
+def set_cs_selection_weights(distance: float = 1.0, price: float = 1.0, load: float = 1.0):
+    """Configure the weights for CS selection strategy.
+    
+    Args:
+        distance: Weight for distance factor (0 to disable, higher = more important)
+        price: Weight for price factor (0 to disable, higher = more important)
+        load: Weight for load factor (0 to disable, higher = more important)
+    """
+    CS_SELECTION_WEIGHTS["distance"] = distance
+    CS_SELECTION_WEIGHTS["price"] = price
+    CS_SELECTION_WEIGHTS["load"] = load
+
 
 def required_energy_kwh(
     current_soc: float, required_soc: float, battery_capacity_kwh: float
@@ -139,9 +169,77 @@ async def handle_cs_proposal(
     return accepted, decision_msg
 
 
+def score_charging_station(
+    ev_x: float,
+    ev_y: float,
+    station: Dict[str, Any],
+) -> float:
+    """Score a charging station based on distance, price, and load.
+    
+    Lower scores are better. Returns a composite score combining all factors.
+    
+    Args:
+        ev_x: EV x position
+        ev_y: EV y position
+        station: Station dict with keys: jid, x, y, electricity_price, used_doors, num_doors
+        
+    Returns:
+        Composite score (lower is better)
+    """
+    # Distance component (normalized)
+    distance = math.hypot(station["x"] - ev_x, station["y"] - ev_y)
+    distance_score = distance  # Keep in original units (larger values = farther)
+    
+    # Price component (normalized, already in €/kWh)
+    price_score = station.get("electricity_price", 0.15)
+    
+    # Load component (0.0 to 1.0, where 1.0 = completely full)
+    used_doors = station.get("used_doors", 0)
+    num_doors = station.get("num_doors", 1)
+    load_factor = used_doors / num_doors if num_doors > 0 else 1.0
+    
+    # Composite score with configurable weights
+    composite_score = (
+        CS_SELECTION_WEIGHTS["distance"] * distance_score
+        + CS_SELECTION_WEIGHTS["price"] * price_score * 100  # Scale price to be comparable
+        + CS_SELECTION_WEIGHTS["load"] * load_factor * 100  # Scale load to be comparable
+    )
+    
+    return composite_score
+
+
+def best_charging_station(
+    x: float, y: float, stations: List[Dict[str, Any]]
+) -> Tuple[Optional[str], float]:
+    """Select the best charging station based on distance, price, and load.
+    
+    Uses weighted scoring to balance proximity, cost, and availability.
+    
+    Returns:
+        Tuple of (station_jid, best_score)
+    """
+    if not stations:
+        return None, float("inf")
+    
+    best_jid = None
+    best_score = float("inf")
+    
+    for station in stations:
+        score = score_charging_station(x, y, station)
+        if score < best_score:
+            best_score = score
+            best_jid = station.get("jid")
+    
+    return best_jid, best_score
+
+
 def closest_station(
     x: float, y: float, stations: List[Dict[str, float]]
 ) -> Tuple[Optional[str], float]:
+    """Get closest station by distance only (legacy function, kept for compatibility).
+    
+    For new code, use best_charging_station() instead which considers price and load.
+    """
     best_jid = None
     best_dist = float("inf")
 

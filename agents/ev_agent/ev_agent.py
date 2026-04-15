@@ -94,7 +94,6 @@ class EVAgent(Agent):
         )
         self.current_target_index = 0
         self.current_destination = None  # The destination we're currently heading to
-        self.free_driving = False  # True when in free-drive (random walk) window
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
 

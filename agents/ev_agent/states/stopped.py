@@ -60,14 +60,8 @@ class StoppedState(State):
         next_stop = agent.next_target() if hasattr(agent, "next_target") else None
 
         if next_stop:
-            stop_type = next_stop.get("type", "destination")
-
             # Calculate distance and travel time to next destination
-            if stop_type == "destination":
-                dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
-            else:
-                # free_drive — no real distance to travel, just leave on time
-                dist = 0.0
+            dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
 
             # Calculate actual travel time based on world clock timing
             time_before = clock.sim_hours
@@ -91,7 +85,7 @@ class StoppedState(State):
             needs_charge_detour = False
             detour_total_hours = 0.0  # Initialize to 0
 
-            if stop_type == "destination" and dist > 0:
+            if dist > 0:
                 energy_needed = _estimate_energy_for_trip(
                     dist, agent.velocity, agent.energy_per_km, tick_sim_hours
                 )
@@ -170,6 +164,9 @@ class StoppedState(State):
                                 min_soc_needed = soc_at_cs + (energy_cs_to_dest / agent.battery_capacity_kwh) + agent.low_soc_threshold
                                 min_soc_needed = min(1.0, min_soc_needed)
                                 
+                                # Initialize max_soc_can_reach for all paths
+                                max_soc_can_reach = soc_at_cs
+                                
                                 if available_charge_time <= 0:
                                     # Already late - charge minimum needed and leave ASAP
                                     print(
@@ -179,6 +176,7 @@ class StoppedState(State):
                                     trip_target_soc = min_soc_needed
                                     energy_to_charge = (trip_target_soc - soc_at_cs) * agent.battery_capacity_kwh
                                     charge_hours = energy_to_charge / agent.max_charge_rate_kw if energy_to_charge > 0 else 0.0
+                                    max_soc_can_reach = trip_target_soc  # Set to what we'll charge to
                                 else:
                                     # Calculate maximum SoC we can reach with available time
                                     max_energy_can_charge = available_charge_time * agent.max_charge_rate_kw
@@ -255,11 +253,7 @@ class StoppedState(State):
             )
 
             # Leave when: time_until_arrival <= total_travel_hours
-            # For free_drive: depart within one tick of the scheduled hour
-            depart_threshold = (
-                total_travel_hours if stop_type == "destination" else tick_sim_hours
-            )
-            if time_until_arrival <= depart_threshold:
+            if time_until_arrival <= total_travel_hours:
 
                 if needs_charge_detour:
                     # Not enough energy — head to charger first

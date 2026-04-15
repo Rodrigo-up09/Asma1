@@ -1,6 +1,5 @@
 import asyncio
 import math
-import random
 
 from spade.behaviour import State
 
@@ -93,21 +92,22 @@ class DrivingState(State):
                 self.set_next_state(STATE_STOPPED)
                 return
         else:
-            # No destination set — random walk (free driving mode)
-            angle = random.uniform(0, 2 * math.pi)
-            agent.x += agent.velocity * math.cos(angle)
-            agent.y += agent.velocity * math.sin(angle)
+            # No destination set — get next target from schedule
+            next_target = agent.next_target()
+            if next_target:
+                agent.current_destination = next_target
+                print(
+                    f"[{t}][{name}][DRIVING] No destination set, picking next from schedule: "
+                    f"\"{next_target['name']}\" at ({next_target['x']:.1f}, {next_target['y']:.1f})"
+                )
+            else:
+                # No schedule available — stay stopped
+                print(f"[{t}][{name}][DRIVING] No destination or schedule available, going to STOPPED")
+                self.set_next_state(STATE_STOPPED)
+                return
 
-            # Wait for real time to pass, then calculate actual sim time elapsed
-            await asyncio.sleep(TICK_SLEEP_SECONDS)
-            time_after = clock.sim_hours
-            tick_sim_hours = time_after - time_before
-
-            drain_kw = agent.energy_per_km * agent.velocity
-            energy_used = drain_kw * tick_sim_hours
-            soc_drop = energy_used / agent.battery_capacity_kwh
-
-            agent.current_soc = max(0.0, agent.current_soc - soc_drop)
+            self.set_next_state(STATE_DRIVING)
+            return
 
             print(
                 f"[{t}][{name}][FREE DRIVING] SoC: {agent.current_soc:.0%} "
@@ -126,43 +126,10 @@ class DrivingState(State):
 
             if agent.current_soc <= agent.low_soc_threshold:
                 agent.current_cs_jid = None
-                agent.free_driving = False
                 print(
-                    f"[{t}][{name}][FREE DRIVING] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
+                    f"[{t}][{name}][DRIVING] SoC below {agent.low_soc_threshold:.0%}, heading to charger..."
                 )
                 self.set_next_state(STATE_GOING_TO_CHARGER)
                 return
-
-            # ── Check if it's time to leave for the next scheduled destination ──
-            if agent.free_driving:
-                next_stop = agent.next_target()
-                # next_target returns the *next* entry after the free_drive one
-                # (since free_drive's hour has already passed)
-                if next_stop and next_stop.get("type", "destination") == "destination":
-                    dist = math.hypot(
-                        next_stop["x"] - agent.x, next_stop["y"] - agent.y
-                    )
-                    # Estimate travel time
-                    num_ticks = (
-                        dist / agent.velocity if agent.velocity > 0 else float("inf")
-                    )
-                    travel_hours = num_ticks * tick_sim_hours
-
-                    now = clock.time_of_day
-                    target_hour = next_stop["hour"]
-                    if target_hour > now:
-                        time_until_arrival = target_hour - now
-                    else:
-                        time_until_arrival = (24.0 - now) + target_hour
-
-                    if time_until_arrival <= travel_hours:
-                        agent.free_driving = False
-                        agent.current_destination = next_stop
-                        print(
-                            f"[{t}][{name}][FREE DRIVING] Time to head to \"{next_stop['name']}\"! "
-                            f"(travel time ≈ {travel_hours:.1f}h)"
-                        )
-                        self.set_next_state(STATE_DRIVING)
-                        return
 
             self.set_next_state(STATE_DRIVING)
