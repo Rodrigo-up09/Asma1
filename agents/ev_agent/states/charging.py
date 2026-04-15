@@ -45,7 +45,7 @@ class ChargingState(State):
             f"(+{energy_added:.1f} kWh) | Target: {target_soc_for_charge:.0%}"
         )
 
-        if agent.current_soc >= target_soc_for_charge:
+        if agent.current_soc >= target_soc_for_charge - 0.05:
             print(f"[{t}][{name}][CHARGING] Charged to target! Resuming driving.")
 
             # ── metric: charging session complete ──

@@ -207,10 +207,12 @@ class CSAgent(Agent):
         fsm.add_transition(source=STATE_FULL, dest=STATE_FULL)
         fsm.add_transition(source=STATE_FULL, dest=STATE_AVAILABLE)
 
-        # Register FSM without specific template to receive all messages.
+        # Register FSM with template to receive ev-charging messages.
         # The FSM._dispatch will route messages to _on_request or _on_inform
         # based on performative; the handlers filter by protocol internally.
-        self.add_behaviour(fsm)
+        template = Template()
+        template.set_metadata("protocol", "ev-charging")
+        self.add_behaviour(fsm, template)
 
         world_update_template = Template()
         world_update_template.set_metadata("protocol", "world-update")

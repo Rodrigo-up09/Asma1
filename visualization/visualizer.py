@@ -103,6 +103,7 @@ class WorldVisualizer:
 
             # Draw building markers (one per unique location)
             buildings_seen = set()
+            bld_colour = (180, 180, 220)
             for ev in self.ev_agents:
                 if hasattr(ev, "schedule") and ev.schedule:
                     for stop in ev.schedule:
@@ -117,17 +118,10 @@ class WorldVisualizer:
                                 (tx, ty + 7),
                                 (tx - 5, ty),
                             ]
-                            bld_colour = (180, 180, 220)
                             pygame.draw.polygon(screen, bld_colour, diamond)
-                            pygame.draw.polygon(screen, WHITE, diamond, 1)
+                            pygame.draw.polygon(screen, (255, 255, 255), diamond, 1)
                             label = font.render(name, True, bld_colour)
                             screen.blit(label, (tx + 8, ty - 7))
-
-            self._draw_legend(screen, font)
-
-            # Title
-            title = font.render("EV Charging Simulation", True, TEXT_COLOUR)
-            screen.blit(title, (10, 8))
 
             # World clock display
             if self.world_clock:
@@ -145,5 +139,3 @@ class WorldVisualizer:
         t = threading.Thread(target=self.run, daemon=True)
         t.start()
         return t
-
-

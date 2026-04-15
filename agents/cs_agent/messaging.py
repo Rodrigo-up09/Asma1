@@ -57,10 +57,13 @@ class CSMessagingService:
         """Parse EV's confirmation of proposal (accept/reject).
         
         Returns:
-            Tuple of (ev_jid, accepted) where accepted is True/False
+            Tuple of (ev_jid, accepted) where accepted is True/False, or None if not a confirmation
         """
         try:
             data = json.loads(msg.body)
+            # Only parse if "accepted" field exists (charge-complete has "status" instead)
+            if "accepted" not in data:
+                return None
             ev_jid = str(msg.sender).split("/")[0]
             accepted = bool(data.get("accepted", False))
             return ev_jid, accepted

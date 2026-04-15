@@ -24,21 +24,24 @@ class EVRenderer:
         for ev in ev_agents:
             self.draw_ev(surface, font, ev)
 
-        for index, ev in enumerate(ev_agents):
-            self.draw_targets(surface, font, ev, index)
-
     def draw_ev(self, surface, font, ev):
         sx, sy = self.world_to_screen(ev.x, ev.y)
         state = self._ev_state(ev)
         name = str(ev.jid).split("@")[0]
         colour = self._state_colour(state)
 
-        if state == "WAITING_QUEUE" and ev.current_cs_jid:
+        # Offset EVs at a CS so they don't overlap the station square
+        if state in ("WAITING_QUEUE", "CHARGING") and ev.current_cs_jid:
             cs_pos = ev._get_cs_position(ev.current_cs_jid)
             target_sx, target_sy = self.world_to_screen(cs_pos["x"], cs_pos["y"])
-            queue_slot = abs(hash(str(ev.jid))) % 4
-            sx = target_sx + 34 + queue_slot * 20
-            sy = target_sy - 12 + queue_slot * 10
+            slot = abs(hash(str(ev.jid))) % 8
+            # Spread around the CS: charging on the left, waiting on the right
+            if state == "CHARGING":
+                sx = target_sx - 34 - (slot % 4) * 22
+                sy = target_sy - 20 + (slot // 4) * 34
+            else:
+                sx = target_sx + 34 + (slot % 4) * 22
+                sy = target_sy - 20 + (slot // 4) * 34
 
         if state == "GOING_TO_CHARGER" and ev.current_cs_jid:
             cs_pos = ev._get_cs_position(ev.current_cs_jid)

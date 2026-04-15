@@ -14,7 +14,7 @@ from .utils import (
 )
 
 STATE_AVAILABLE = "AVAILABLE"
-STATE_FULL      = "FULL"
+STATE_FULL = "FULL"
 
 
 # ── Metrics helper ─────────────────────────────
@@ -31,18 +31,23 @@ async def _send_stat(state, world_jid: str, payload: dict) -> None:
 
 async def _report_load(state) -> None:
     """Send current load kW to the WorldAgent after any door change."""
-    agent       = state.agent
-    world_jid   = getattr(agent, "world_jid", None)
+    agent = state.agent
+    world_jid = getattr(agent, "world_jid", None)
     current_load = agent.used_doors * agent.max_charging_rate
-    await _send_stat(state, world_jid, {
-        "event":        "load_update",
-        "current_load": current_load,
-    })
+    await _send_stat(
+        state,
+        world_jid,
+        {
+            "event": "load_update",
+            "current_load": current_load,
+        },
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
 #  FSM
 # ══════════════════════════════════════════════════════════════════════
+
 
 class CSChargingFSM(FSMBehaviour):
     async def on_start(self):
@@ -50,12 +55,12 @@ class CSChargingFSM(FSMBehaviour):
 
     async def on_end(self):
         print(f"[FSM] Finished at state: {self.current_state}")
-    
+
     async def on_receive(self, msg):
         """Process incoming messages by dispatching to current state."""
         if self.current_state:
             state = self._states[self.current_state]
-            if hasattr(state, '_dispatch'):
+            if hasattr(state, "_dispatch"):
                 await state._dispatch(msg)
 
 
@@ -74,7 +79,7 @@ class CSStateMixin:
         if msg is None:
             return
         performative = msg.get_metadata("performative")
-        handler      = getattr(self, f"_on_{performative}", None)
+        handler = getattr(self, f"_on_{performative}", None)
         if handler:
             await handler(msg)
 
@@ -82,7 +87,7 @@ class CSStateMixin:
         raise NotImplementedError
 
     async def _on_request(self, msg):
-        agent  = self.agent
+        agent = self.agent
         parsed = agent.messaging_service.parse_request(msg, agent.max_charging_rate)
 
         if not parsed:
@@ -103,7 +108,7 @@ class CSStateMixin:
             decision = "accept"
         else:
             decision = "wait"
-            
+
             # Add to incoming requests for tracking
             arriving_hours = parsed.get("arriving_hours")
             if arriving_hours is not None:
@@ -114,10 +119,10 @@ class CSStateMixin:
                     parsed.get("required_energy", 0.0),
                     parsed.get("max_charging_rate", agent.max_charging_rate),
                 )
-        
+
         # Store proposal as pending (waiting for EV confirmation)
         store_pending_proposal(agent.pending_proposals, ev_jid, parsed, decision)
-        
+
         # Send proposal (with extra info)
         extra = {"price": agent.energy_price}
         if decision == "wait":
@@ -128,14 +133,16 @@ class CSStateMixin:
                 agent.max_charging_rate,
             )
             extra["estimated_wait_minutes"] = round(estimated_wait_minutes, 2)
-        
+
         await agent.messaging_service.send_response(
             self,
             ev_jid,
             decision,
             extra=extra,
         )
-        print(f"[CS] Proposed {decision.upper()} to {ev_jid} | Pending: {len(agent.pending_proposals)}")
+        print(
+            f"[CS] Proposed {decision.upper()} to {ev_jid} | Pending: {len(agent.pending_proposals)}"
+        )
 
     async def _on_inform(self, msg):
         agent = self.agent
@@ -159,7 +166,9 @@ class CSStateMixin:
                 print(f"[CS] World update: energy_price={agent.energy_price:.4f} €/kWh")
 
             if "solar_production_rate" in world_update:
-                agent.solar_production_rate = max(0.0, world_update["solar_production_rate"])
+                agent.solar_production_rate = max(
+                    0.0, world_update["solar_production_rate"]
+                )
                 print(
                     "[CS] World update: "
                     f"solar_production_rate={agent.solar_production_rate:.2f} kW"
@@ -192,19 +201,21 @@ class CSStateMixin:
                 )
                 # ── metric: door freed ──
                 await _report_load(self)
+                # ── immediately try to serve queued EVs ──
+                await self._process_queue()
 
     async def _handle_proposal_confirmed(self, ev_jid: str):
         """Handle EV confirmation of proposal."""
         agent = self.agent
-        
+
         proposal = retrieve_and_remove_proposal(agent.pending_proposals, ev_jid)
         if not proposal:
             print(f"[CS] Proposal confirm from {ev_jid} but no pending proposal found")
             return
-        
+
         decision = proposal.get("decision")
         request_data = proposal.get("request", {})
-        
+
         if decision == "accept":
             # Register for immediate charging
             agent.used_doors += 1
@@ -214,28 +225,32 @@ class CSStateMixin:
                 "price": agent.energy_price,
             }
             remove_incoming_request(agent.incoming_requests, ev_jid)
-            print(f"[CS] {ev_jid} CONFIRMED ACCEPT | Active: {len(agent.active_charging)} | Doors used: {agent.used_doors}/{agent.num_doors}")
+            print(
+                f"[CS] {ev_jid} CONFIRMED ACCEPT | Active: {len(agent.active_charging)} | Doors used: {agent.used_doors}/{agent.num_doors}"
+            )
             await _report_load(self)
-        
+
         elif decision == "wait":
             # Register in queue
             agent.request_queue.enqueue(request_data)
-            print(f"[CS] {ev_jid} CONFIRMED WAIT | Queue size: {len(agent.request_queue)} | Incoming: {len(agent.incoming_requests)}")
+            print(
+                f"[CS] {ev_jid} CONFIRMED WAIT | Queue size: {len(agent.request_queue)} | Incoming: {len(agent.incoming_requests)}"
+            )
 
     async def _handle_proposal_rejected(self, ev_jid: str):
         """Handle EV rejection of proposal."""
         agent = self.agent
-        
+
         proposal = retrieve_and_remove_proposal(agent.pending_proposals, ev_jid)
         if not proposal:
             print(f"[CS] Proposal reject from {ev_jid} but no pending proposal found")
             return
-        
+
         remove_incoming_request(agent.incoming_requests, ev_jid)
         print(f"[CS] {ev_jid} REJECTED proposal")
 
     async def _process_queue(self):
-        agent        = self.agent
+        agent = self.agent
         doors_before = agent.used_doors
         await agent.request_queue.dispatch_eligible(
             has_free_door=lambda: agent.used_doors < agent.num_doors,
@@ -251,6 +266,7 @@ class CSStateMixin:
 #  States
 # ══════════════════════════════════════════════════════════════════════
 
+
 class AvailableState(CSStateMixin, State):
     def _next_state(self):
         if self.agent.used_doors >= self.agent.num_doors:
@@ -260,6 +276,7 @@ class AvailableState(CSStateMixin, State):
     async def run(self):
         self.agent.update_solar_energy()
         await self._dispatch(await self.receive(timeout=5))
+        await self._process_queue()
         self.set_next_state(self._next_state())
 
 
