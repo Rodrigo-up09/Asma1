@@ -3,7 +3,15 @@ import json
 from spade.behaviour import FSMBehaviour, State
 from spade.message import Message
 
-from .utils import charging_time_minutes
+from .utils import (
+    add_incoming_request,
+    apply_confirmed_proposal,
+    calculate_wait_time_minutes,
+    charging_time_minutes,
+    remove_incoming_request,
+    retrieve_and_remove_proposal,
+    store_pending_proposal,
+)
 
 STATE_AVAILABLE = "AVAILABLE"
 STATE_FULL      = "FULL"
@@ -55,28 +63,12 @@ class CSStateMixin:
     """Shared logic for CS FSM states."""
 
     def _estimate_wait_minutes(self, agent, incoming_request):
-        doors             = max(1, int(agent.num_doors))
-        door_available_at = [0.0] * doors
-
-        for session in agent.active_charging.values():
-            duration = charging_time_minutes(
-                session.get("required_energy", 0.0),
-                session.get("rate", agent.max_charging_rate),
-                agent.max_charging_rate,
-            )
-            next_door = min(range(doors), key=lambda idx: door_available_at[idx])
-            door_available_at[next_door] += duration
-
-        for request in agent.request_queue.snapshot():
-            duration = charging_time_minutes(
-                request.get("required_energy", 0.0),
-                request.get("max_charging_rate", agent.max_charging_rate),
-                agent.max_charging_rate,
-            )
-            next_door = min(range(doors), key=lambda idx: door_available_at[idx])
-            door_available_at[next_door] += duration
-
-        return min(door_available_at)
+        return calculate_wait_time_minutes(
+            active_charging=agent.active_charging,
+            request_queue=agent.request_queue.snapshot(),
+            num_doors=agent.num_doors,
+            cs_max_charging_rate=agent.max_charging_rate,
+        )
 
     async def _dispatch(self, msg):
         if msg is None:
@@ -106,23 +98,44 @@ class CSStateMixin:
             print(f"[CS] Ignored duplicate request from {ev_jid} (already charging)")
             return
 
+        # Determine decision (accept or wait)
         if agent.can_accept_request(parsed):
-            await agent.accept_request(parsed, self, from_queue=False)
-            # ── metric: door opened ──
-            await _report_load(self)
+            decision = "accept"
         else:
-            estimated_wait_minutes = self._estimate_wait_minutes(agent, parsed)
-            agent.request_queue.enqueue(parsed)
-            await agent.messaging_service.send_response(
-                self,
-                ev_jid,
-                "wait",
-                extra={
-                    "estimated_wait_minutes": round(estimated_wait_minutes, 2),
-                    "price": agent.energy_price,
-                },
+            decision = "wait"
+            
+            # Add to incoming requests for tracking
+            arriving_hours = parsed.get("arriving_hours")
+            if arriving_hours is not None:
+                add_incoming_request(
+                    agent.incoming_requests,
+                    ev_jid,
+                    arriving_hours,
+                    parsed.get("required_energy", 0.0),
+                    parsed.get("max_charging_rate", agent.max_charging_rate),
+                )
+        
+        # Store proposal as pending (waiting for EV confirmation)
+        store_pending_proposal(agent.pending_proposals, ev_jid, parsed, decision)
+        
+        # Send proposal (with extra info)
+        extra = {"price": agent.energy_price}
+        if decision == "wait":
+            estimated_wait_minutes = calculate_wait_time_minutes(
+                agent.active_charging,
+                agent.request_queue.snapshot(),
+                agent.num_doors,
+                agent.max_charging_rate,
             )
-            print(f"[CS] Queued {ev_jid} | Queue size: {len(agent.request_queue)}")
+            extra["estimated_wait_minutes"] = round(estimated_wait_minutes, 2)
+        
+        await agent.messaging_service.send_response(
+            self,
+            ev_jid,
+            decision,
+            extra=extra,
+        )
+        print(f"[CS] Proposed {decision.upper()} to {ev_jid} | Pending: {len(agent.pending_proposals)}")
 
     async def _on_inform(self, msg):
         agent = self.agent
@@ -153,6 +166,17 @@ class CSStateMixin:
                 )
             return
 
+        # Check for proposal confirmation from EV
+        proposal_confirm = agent.messaging_service.parse_proposal_confirm(msg)
+        if proposal_confirm:
+            ev_jid, accepted = proposal_confirm
+            if accepted:
+                await self._handle_proposal_confirmed(ev_jid)
+            else:
+                await self._handle_proposal_rejected(ev_jid)
+            return
+
+        # Otherwise, handle charge-complete inform
         parsed = agent.messaging_service.parse_inform_status(msg)
 
         if not parsed:
@@ -168,6 +192,47 @@ class CSStateMixin:
                 )
                 # ── metric: door freed ──
                 await _report_load(self)
+
+    async def _handle_proposal_confirmed(self, ev_jid: str):
+        """Handle EV confirmation of proposal."""
+        agent = self.agent
+        
+        proposal = retrieve_and_remove_proposal(agent.pending_proposals, ev_jid)
+        if not proposal:
+            print(f"[CS] Proposal confirm from {ev_jid} but no pending proposal found")
+            return
+        
+        decision = proposal.get("decision")
+        request_data = proposal.get("request", {})
+        
+        if decision == "accept":
+            # Register for immediate charging
+            agent.used_doors += 1
+            agent.active_charging[ev_jid] = {
+                "required_energy": request_data.get("required_energy", 0.0),
+                "rate": request_data.get("max_charging_rate", agent.max_charging_rate),
+                "price": agent.energy_price,
+            }
+            remove_incoming_request(agent.incoming_requests, ev_jid)
+            print(f"[CS] {ev_jid} CONFIRMED ACCEPT | Active: {len(agent.active_charging)} | Doors used: {agent.used_doors}/{agent.num_doors}")
+            await _report_load(self)
+        
+        elif decision == "wait":
+            # Register in queue
+            agent.request_queue.enqueue(request_data)
+            print(f"[CS] {ev_jid} CONFIRMED WAIT | Queue size: {len(agent.request_queue)} | Incoming: {len(agent.incoming_requests)}")
+
+    async def _handle_proposal_rejected(self, ev_jid: str):
+        """Handle EV rejection of proposal."""
+        agent = self.agent
+        
+        proposal = retrieve_and_remove_proposal(agent.pending_proposals, ev_jid)
+        if not proposal:
+            print(f"[CS] Proposal reject from {ev_jid} but no pending proposal found")
+            return
+        
+        remove_incoming_request(agent.incoming_requests, ev_jid)
+        print(f"[CS] {ev_jid} REJECTED proposal")
 
     async def _process_queue(self):
         agent        = self.agent

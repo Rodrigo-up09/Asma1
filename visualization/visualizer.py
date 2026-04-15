@@ -3,48 +3,29 @@ Pygame 2-D world visualizer for the EV / CS multi-agent simulation.
 Runs in its own thread so it does not block SPADE's asyncio loop.
 """
 
-import math
 import os
 import threading
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 import pygame
 
-# ── Colours ────────────────────────────────────
-WHITE = (255, 255, 255)
-GREY_BG = (30, 30, 35)
-GRID_COLOUR = (50, 50, 55)
-TEXT_COLOUR = (220, 220, 220)
-TEXT_DIM = (140, 140, 140)
 
-CS_COLOUR = (46, 204, 113)  # green
-CS_BORDER = (39, 174, 96)
-
-EV_DRIVING = (52, 152, 219)  # blue
-EV_GOING = (243, 156, 18)  # orange
-EV_CHARGING = (241, 196, 15)  # yellow
-EV_WAITING = (155, 89, 182)  # purple
-
-SOC_HIGH = (46, 204, 113)  # green
-SOC_LOW = (231, 76, 60)  # red
-
-LINE_COLOUR = (243, 156, 18, 120)  # semi-transparent orange
-
-TARGET_COLOURS = [
-    (100, 180, 255),  # light blue
-    (255, 150, 200),  # pink
-    (180, 255, 150),  # light green
-    (255, 200, 100),  # light orange
-]
+def _load_renderer(relative_path: str, class_name: str):
+    module_path = Path(__file__).resolve().parent / relative_path
+    spec = spec_from_file_location(class_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load renderer from {module_path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, class_name)
 
 
-def _soc_colour(soc: float):
-    """Interpolate green→red based on SoC (1.0 = green, 0.0 = red)."""
-    r = int(SOC_LOW[0] + (SOC_HIGH[0] - SOC_LOW[0]) * soc)
-    g = int(SOC_LOW[1] + (SOC_HIGH[1] - SOC_LOW[1]) * soc)
-    b = int(SOC_LOW[2] + (SOC_HIGH[2] - SOC_LOW[2]) * soc)
-    return (r, g, b)
+CSRenderer = _load_renderer("views/cs/renderer.py", "CSRenderer")
+EVRenderer = _load_renderer("views/ev/renderer.py", "EVRenderer")
+WorldRenderer = _load_renderer("views/world/renderer.py", "WorldRenderer")
 
 
 class WorldVisualizer:
@@ -73,135 +54,19 @@ class WorldVisualizer:
         self.offset_x = width // 2
         self.offset_y = height // 2
 
+        self.cs_renderer = CSRenderer(world_to_screen=self.world_to_screen)
+        self.ev_renderer = EVRenderer(world_to_screen=self.world_to_screen)
+        self.world_renderer = WorldRenderer(
+            width=self.width,
+            height=self.height,
+            scale=self.scale,
+        )
+
     # ── coordinate helpers ─────────────────────
     def world_to_screen(self, wx, wy):
         sx = int(self.offset_x + wx * self.scale)
         sy = int(self.offset_y - wy * self.scale)  # y flipped
         return sx, sy
-
-    # ── drawing ────────────────────────────────
-    def _draw_grid(self, surface):
-        step = int(self.scale * 5)  # grid every 5 world-units
-        for x in range(0, self.width, step):
-            pygame.draw.line(surface, GRID_COLOUR, (x, 0), (x, self.height))
-        for y in range(0, self.height, step):
-            pygame.draw.line(surface, GRID_COLOUR, (0, y), (self.width, y))
-
-    def _draw_cs(self, surface, font, cs):
-        sx, sy = self.world_to_screen(cs.x, cs.y)
-        size = 22
-
-        # Station square
-        rect = pygame.Rect(sx - size, sy - size, size * 2, size * 2)
-        pygame.draw.rect(surface, CS_COLOUR, rect, border_radius=5)
-        pygame.draw.rect(surface, CS_BORDER, rect, width=2, border_radius=5)
-
-        # ⚡ icon
-        bolt = font.render("⚡", True, WHITE)
-        surface.blit(bolt, (sx - bolt.get_width() // 2, sy - bolt.get_height() // 2))
-
-        # Label
-        name = str(cs.jid).split("@")[0]
-        label = font.render(name, True, TEXT_COLOUR)
-        surface.blit(label, (sx - label.get_width() // 2, sy + size + 4))
-
-        # Doors info
-        info = font.render(f"{cs.used_doors}/{cs.num_doors} doors", True, TEXT_DIM)
-        surface.blit(info, (sx - info.get_width() // 2, sy + size + 18))
-
-        # Electricity price
-        price = getattr(cs, "electricity_price", 0.0)
-        price_text = font.render(f"${price:.2f}/kWh", True, (255, 220, 100))
-        surface.blit(price_text, (sx - price_text.get_width() // 2, sy + size + 32))
-
-    def _ev_state(self, ev):
-        """Best-effort FSM state detection."""
-        # Check if there is an active behaviour with current_state
-        for b in ev.behaviours:
-            if hasattr(b, "current_state"):
-                return b.current_state
-        return "UNKNOWN"
-
-    def _draw_ev(self, surface, font, ev):
-        sx, sy = self.world_to_screen(ev.x, ev.y)
-        state = self._ev_state(ev)
-        name = str(ev.jid).split("@")[0]
-
-        # Pick colour by state
-        if state == "CHARGING":
-            colour = EV_CHARGING
-        elif state == "WAITING_QUEUE":
-            colour = EV_WAITING
-        elif state == "GOING_TO_CHARGER":
-            colour = EV_GOING
-        else:
-            colour = EV_DRIVING
-
-        # Show waiting EVs beside their target CS, not at their world position.
-        if state == "WAITING_QUEUE" and ev.current_cs_jid:
-            cs_pos = ev._get_cs_position(ev.current_cs_jid)
-            target_sx, target_sy = self.world_to_screen(cs_pos["x"], cs_pos["y"])
-            queue_slot = abs(hash(str(ev.jid))) % 4
-            sx = target_sx + 34 + queue_slot * 20
-            sy = target_sy - 12 + queue_slot * 10
-
-        # Draw line to target CS if heading there
-        if state == "GOING_TO_CHARGER" and ev.current_cs_jid:
-            cs_pos = ev._get_cs_position(ev.current_cs_jid)
-            target_sx, target_sy = self.world_to_screen(cs_pos["x"], cs_pos["y"])
-            pygame.draw.line(surface, EV_GOING, (sx, sy), (target_sx, target_sy), 2)
-
-        # Draw line to scheduled target if driving
-        if state == "DRIVING" and hasattr(ev, "next_target"):
-            target = ev.next_target()
-            if target:
-                tx, ty = self.world_to_screen(target["x"], target["y"])
-                pygame.draw.line(surface, EV_DRIVING, (sx, sy), (tx, ty), 1)
-
-        # Car circle
-        radius = 14
-        pygame.draw.circle(surface, colour, (sx, sy), radius)
-        pygame.draw.circle(surface, WHITE, (sx, sy), radius, 2)
-
-        # Name label
-        label = font.render(name, True, WHITE)
-        surface.blit(label, (sx - label.get_width() // 2, sy - radius - 16))
-
-        # SoC bar
-        bar_w = 30
-        bar_h = 6
-        bar_x = sx - bar_w // 2
-        bar_y = sy + radius + 4
-        pygame.draw.rect(
-            surface, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h), border_radius=2
-        )
-        fill_w = int(bar_w * ev.current_soc)
-        if fill_w > 0:
-            pygame.draw.rect(
-                surface,
-                _soc_colour(ev.current_soc),
-                (bar_x, bar_y, fill_w, bar_h),
-                border_radius=2,
-            )
-
-        # SoC percentage text
-        soc_text = font.render(f"{ev.current_soc:.0%}", True, TEXT_DIM)
-        surface.blit(soc_text, (sx - soc_text.get_width() // 2, bar_y + bar_h + 2))
-
-    def _draw_legend(self, surface, font):
-        x, y = 10, self.height - 110
-        items = [
-            (EV_DRIVING, "Driving"),
-            (EV_GOING, "Going to charger"),
-            (EV_WAITING, "Waiting queue"),
-            (EV_CHARGING, "Charging"),
-            (CS_COLOUR, "Charging station"),
-        ]
-        for colour, label in items:
-            pygame.draw.circle(surface, colour, (x + 6, y + 6), 6)
-            text = font.render(label, True, TEXT_COLOUR)
-            surface.blit(text, (x + 18, y - 1))
-            y += 20
 
     # ── main loop (runs in thread) ─────────────
     def run(self):
@@ -226,14 +91,15 @@ class WorldVisualizer:
                     self._stop_event.set()
                     break
 
-            screen.fill(GREY_BG)
-            self._draw_grid(screen)
+            self.world_renderer.draw_background(screen)
+            self.world_renderer.draw_grid(screen)
 
             for cs in self.cs_agents:
-                self._draw_cs(screen, font, cs)
+                self.cs_renderer.draw(screen, font, cs)
 
-            for i, ev in enumerate(self.ev_agents):
-                self._draw_ev(screen, font, ev)
+            self.ev_renderer.draw_all(screen, font, self.ev_agents)
+            self.world_renderer.draw_legend(screen, font)
+            self.world_renderer.draw_title(screen, font)
 
             # Draw building markers (one per unique location)
             buildings_seen = set()
@@ -265,11 +131,7 @@ class WorldVisualizer:
 
             # World clock display
             if self.world_clock:
-                time_str = self.world_clock.formatted_time()
-                time_surface = time_font.render(time_str, True, (255, 220, 100))
-                screen.blit(
-                    time_surface, (self.width - time_surface.get_width() - 14, 8)
-                )
+                self.world_renderer.draw_time(screen, time_font, self.world_clock)
 
             pygame.display.flip()
             clock.tick(self.fps)
@@ -283,3 +145,5 @@ class WorldVisualizer:
         t = threading.Thread(target=self.run, daemon=True)
         t.start()
         return t
+
+

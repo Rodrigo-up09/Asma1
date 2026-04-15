@@ -28,9 +28,24 @@ class WorldUpdateBehaviour(CyclicBehaviour):
         except (json.JSONDecodeError, TypeError):
             return
 
-        self.agent.electricity_price = data.get("electricity_price", self.agent.electricity_price)
-        self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
-        self.agent.renewable_available = data.get("renewable_available", self.agent.renewable_available)
+        world_update = self.agent.messaging_service.parse_world_update(msg)
+        if not world_update:
+            return
+
+        if "energy_price" in world_update:
+            self.agent.energy_price = max(0.0, world_update["energy_price"])
+            self.agent.electricity_price = self.agent.energy_price
+
+        if "solar_production_rate" in world_update:
+            self.agent.solar_production_rate = max(0.0, world_update["solar_production_rate"])
+
+        if "grid_load" in data:
+            try:
+                self.agent.grid_load = float(data["grid_load"])
+            except (TypeError, ValueError):
+                pass
+
+        self.agent.renewable_available = self.agent.solar_production_rate > 0.0
 
 
 # ──────────────────────────────────────────────
@@ -68,14 +83,16 @@ class CSAgent(Agent):
         self.used_doors = 0
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
+        self.incoming_requests = {}  # EV JID -> {arriving_hours, required_energy, max_rate}
+        self.pending_proposals = {}  # EV JID -> {proposal_data, decision} awaiting confirmation
         self.messaging_service = CSMessagingService()
         self.world_clock = None
         self._last_solar_update_sim_hours = None
         
         # World-state — updated by WorldUpdateBehaviour on each broadcast
-        self.electricity_price: float = 0.15
+        self.electricity_price: float = self.energy_price
         self.grid_load: float = 0.5
-        self.renewable_available: bool = False
+        self.renewable_available: bool = self.solar_production_rate > 0.0
 
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = world_jid
@@ -127,6 +144,9 @@ class CSAgent(Agent):
         self.used_doors += 1
         if self.actual_solar_capacity >= request["required_energy"]:
             self.actual_solar_capacity -= request["required_energy"]
+        
+        # Remove from incoming requests (charging now, not incoming anymore)
+        self.incoming_requests.pop(ev_jid, None)
         
         # Calculate price with current solar discount
         discount = self.solar_discount()
