@@ -50,8 +50,25 @@ class StoppedState(State):
             print(
                 f"[{t}][{name}][STOPPED] SoC below {agent.low_soc_threshold:.0%}, selecting CS..."
             )
+            # Determine the next scheduled destination so we know where to go after charging
+            next_stop = agent.next_target()
+            if next_stop:
+                agent.current_destination = next_stop
+                # Compute distance to next stop
+                dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
+                # Measure tick duration and compute travel time, current sim time
+                travel_hours, tick_sim_hours, now = await self._calculate_timing(dist)
+                target_hour = next_stop["hour"]
+                time_until_arrival = self._calculate_time_until_arrival(target_hour, now)
+                # Determine if a charging detour is needed and compute trip target SOC
+                await self._handle_charging_detour(
+                    next_stop, dist, travel_hours, tick_sim_hours, time_until_arrival, t, name
+                )
+            # If no scheduled stop, we still need to charge; no trip target will be set.
             chosen = await self.agent.select_and_commit_cs(self)
             if chosen:
+                if agent.current_cs_jid is None:
+                    agent.current_cs_jid = chosen
                 self.set_next_state(STATE_GOING_TO_CHARGER)
                 return True
             else:
@@ -276,6 +293,9 @@ class StoppedState(State):
                     if not chosen:
                         print(f"[{t}][{name}][STOPPED] Could not secure CS, will retry.")
                         return None
+                    # If we have a chosen CS but current_cs_jid wasn't set (fallback case), set it now
+                    if self.agent.current_cs_jid is None:
+                        self.agent.current_cs_jid = chosen
                 # else: already have a committed CS from earlier
                 self.agent.current_destination = next_stop
                 return STATE_GOING_TO_CHARGER

@@ -197,8 +197,15 @@ class EVAgent(Agent):
                 self.current_cs_jid = jid
                 return jid
 
-        print(f"[{t}][{name}][SELECT] All CSs rejected commitment.")
-        return None
+        # All CSs rejected the commitment (or no responses). Fallback: travel to the best-scoring CS anyway.
+        if candidates:
+            best_jid = candidates[0][2]["jid"]
+            print(f"[{t}][{name}][SELECT] All CSs rejected. Falling back to {best_jid} (no reservation).")
+            self.current_cs_jid = best_jid
+            return best_jid
+        else:
+            print(f"[{t}][{name}][SELECT] No CS stations available.")
+            return None
 
     def mark_deadline_missed(self):
         """Advance schedule index to skip the destination that was just missed."""
