@@ -7,6 +7,8 @@ from .utils import (
     add_incoming_request,
     apply_confirmed_proposal,
     calculate_wait_time_minutes,
+    cleanup_expired_pending_proposals,
+    count_pending_slot_reservations,
     charging_time_minutes,
     remove_incoming_request,
     retrieve_and_remove_proposal,
@@ -73,7 +75,20 @@ class CSStateMixin:
             request_queue=agent.request_queue.snapshot(),
             num_doors=agent.num_doors,
             cs_max_charging_rate=agent.max_charging_rate,
+            pending_proposals=agent.pending_proposals,
         )
+
+    def _cleanup_expired_pending(self, agent) -> int:
+        expired_ev_jids = cleanup_expired_pending_proposals(agent.pending_proposals)
+        for ev_jid in expired_ev_jids:
+            remove_incoming_request(agent.incoming_requests, ev_jid)
+        return len(expired_ev_jids)
+
+    def _can_offer_accept(self, agent, request: dict) -> bool:
+        if request.get("ev_jid") in agent.active_charging:
+            return False
+        reserved_slots = count_pending_slot_reservations(agent.pending_proposals)
+        return (agent.used_doors + reserved_slots) < agent.num_doors
 
     async def _dispatch(self, msg):
         if msg is None:
@@ -88,6 +103,10 @@ class CSStateMixin:
 
     async def _on_request(self, msg):
         agent = self.agent
+        expired_count = self._cleanup_expired_pending(agent)
+        if expired_count:
+            print(f"[CS] Cleaned {expired_count} expired pending proposal(s)")
+
         parsed = agent.messaging_service.parse_request(msg, agent.max_charging_rate)
 
         if not parsed:
@@ -104,7 +123,7 @@ class CSStateMixin:
             return
 
         # Determine decision (accept or wait)
-        if agent.can_accept_request(parsed):
+        if self._can_offer_accept(agent, parsed):
             decision = "accept"
         else:
             decision = "wait"
@@ -131,6 +150,7 @@ class CSStateMixin:
                 agent.request_queue.snapshot(),
                 agent.num_doors,
                 agent.max_charging_rate,
+                pending_proposals=agent.pending_proposals,
             )
             extra["estimated_wait_minutes"] = round(estimated_wait_minutes, 2)
 
@@ -251,9 +271,13 @@ class CSStateMixin:
 
     async def _process_queue(self):
         agent = self.agent
+        self._cleanup_expired_pending(agent)
+
         doors_before = agent.used_doors
         await agent.request_queue.dispatch_eligible(
-            has_free_door=lambda: agent.used_doors < agent.num_doors,
+            has_free_door=lambda: (
+                agent.used_doors + count_pending_slot_reservations(agent.pending_proposals)
+            ) < agent.num_doors,
             can_accept_request=agent.can_accept_request,
             accept_request=lambda req: agent.accept_request(req, self, from_queue=True),
         )

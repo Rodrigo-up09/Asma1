@@ -14,6 +14,7 @@ from .messaging import CSMessagingService
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
 from .models import CSConfig
+from .utils import count_pending_slot_reservations
 
 
 class WorldUpdateBehaviour(CyclicBehaviour):
@@ -133,9 +134,10 @@ class CSAgent(Agent):
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
+        reserved_slots = count_pending_slot_reservations(self.pending_proposals)
         return (
             ev_jid not in self.active_charging
-            and self.used_doors < self.num_doors
+            and (self.used_doors + reserved_slots) < self.num_doors
             
         )
 

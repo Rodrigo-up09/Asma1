@@ -1,4 +1,9 @@
 
+import time
+from typing import Any, Dict, Iterable, List
+
+
+DEFAULT_PROPOSAL_TTL_SECONDS = 3.0
 
 
 def charging_time_minutes(required_energy_kwh, ev_rate_kw, cs_rate_kw):
@@ -9,7 +14,57 @@ def charging_time_minutes(required_energy_kwh, ev_rate_kw, cs_rate_kw):
     return (required_energy / effective_rate) * 60.0
 
 
-def store_pending_proposal(pending_proposals: dict, ev_jid: str, request_data: dict, decision: str) -> None:
+def _proposal_is_expired(proposal: Dict[str, Any], now_monotonic: float) -> bool:
+    expires_at = proposal.get("expires_at")
+    if expires_at is None:
+        return False
+    return float(expires_at) <= float(now_monotonic)
+
+
+def _iter_active_pending_proposals(
+    pending_proposals: Dict[str, Dict[str, Any]],
+    now_monotonic: float,
+) -> Iterable[Dict[str, Any]]:
+    for proposal in pending_proposals.values():
+        if not _proposal_is_expired(proposal, now_monotonic):
+            yield proposal
+
+
+def count_pending_slot_reservations(
+    pending_proposals: Dict[str, Dict[str, Any]],
+    now_monotonic: float | None = None,
+) -> int:
+    """Count active pending proposals that reserve a charging slot."""
+    now_value = time.monotonic() if now_monotonic is None else now_monotonic
+    return sum(
+        1
+        for proposal in _iter_active_pending_proposals(pending_proposals, now_value)
+        if proposal.get("reserves_slot", proposal.get("decision") == "accept")
+    )
+
+
+def cleanup_expired_pending_proposals(
+    pending_proposals: Dict[str, Dict[str, Any]],
+    now_monotonic: float | None = None,
+) -> List[str]:
+    """Remove expired pending proposals and return removed EV JIDs."""
+    now_value = time.monotonic() if now_monotonic is None else now_monotonic
+    expired_ev_jids: List[str] = []
+    for ev_jid, proposal in list(pending_proposals.items()):
+        if _proposal_is_expired(proposal, now_value):
+            expired_ev_jids.append(ev_jid)
+            pending_proposals.pop(ev_jid, None)
+    return expired_ev_jids
+
+
+def store_pending_proposal(
+    pending_proposals: Dict[str, Dict[str, Any]],
+    ev_jid: str,
+    request_data: dict,
+    decision: str,
+    ttl_seconds: float = DEFAULT_PROPOSAL_TTL_SECONDS,
+    now_monotonic: float | None = None,
+) -> None:
     """Store a pending proposal awaiting EV confirmation.
     
     Args:
@@ -18,9 +73,13 @@ def store_pending_proposal(pending_proposals: dict, ev_jid: str, request_data: d
         request_data: Original request parsed from EV
         decision: "accept" or "wait"
     """
+    now_value = time.monotonic() if now_monotonic is None else now_monotonic
     pending_proposals[ev_jid] = {
         "request": request_data,
         "decision": decision,
+        "reserves_slot": decision == "accept",
+        "created_at": now_value,
+        "expires_at": now_value + max(0.0, float(ttl_seconds)),
     }
 
 
@@ -85,24 +144,81 @@ def remove_incoming_request(incoming_requests: dict, ev_jid: str) -> None:
     incoming_requests.pop(ev_jid, None)
 
 
+def _append_request_duration_to_earliest_door(
+    door_available_at: List[float],
+    request: Dict[str, Any],
+    cs_max_charging_rate: float,
+) -> None:
+    duration = charging_time_minutes(
+        request.get("required_energy", 0.0),
+        request.get("max_charging_rate", cs_max_charging_rate),
+        cs_max_charging_rate,
+    )
+    next_door = min(range(len(door_available_at)), key=lambda idx: door_available_at[idx])
+    door_available_at[next_door] += duration
+
+
+def _build_pending_reservation_requests(
+    pending_proposals: Dict[str, Dict[str, Any]] | None,
+    now_monotonic: float,
+) -> List[Dict[str, Any]]:
+    if not pending_proposals:
+        return []
+
+    pending_requests: List[Dict[str, Any]] = []
+    for proposal in _iter_active_pending_proposals(pending_proposals, now_monotonic):
+        if not proposal.get("reserves_slot", proposal.get("decision") == "accept"):
+            continue
+
+        request = proposal.get("request") or {}
+        pending_requests.append(
+            {
+                "required_energy": request.get("required_energy", 0.0),
+                "max_charging_rate": request.get("max_charging_rate", 0.0),
+            }
+        )
+    return pending_requests
+
+
+def _build_incoming_requests_for_estimate(
+    incoming_requests: Dict[str, Dict[str, Any]] | None,
+) -> List[Dict[str, Any]]:
+    if not incoming_requests:
+        return []
+    return [
+        {
+            "required_energy": item.get("required_energy", 0.0),
+            "max_charging_rate": item.get("max_charging_rate", 0.0),
+        }
+        for item in incoming_requests.values()
+    ]
+
+
 def calculate_wait_time_minutes(
     active_charging: dict,
     request_queue: list,
     num_doors: int,
     cs_max_charging_rate: float,
+    pending_proposals: Dict[str, Dict[str, Any]] | None = None,
+    incoming_requests: Dict[str, Dict[str, Any]] | None = None,
+    include_incoming_requests: bool = False,
 ) -> float:
-    """Calculate estimated wait time based on active charging, queue, and incoming.
+    """Calculate estimated wait time until the first door is available.
     
     Args:
         active_charging: Dict of currently charging EVs
         request_queue: List of queued requests
         num_doors: Number of charging doors
         cs_max_charging_rate: Station's max charging rate (kW)
+        pending_proposals: Pending CS proposals; only active "accept" entries reserve slots
+        incoming_requests: Incoming, not-yet-confirmed requests (optional)
+        include_incoming_requests: Whether incoming requests should affect estimate
         
     Returns:
         Wait time in minutes until a door is free
     """
     doors = max(1, int(num_doors))
+    now_value = time.monotonic()
     door_available_at = [0.0] * doors
 
     # Account for active charging sessions
@@ -117,12 +233,27 @@ def calculate_wait_time_minutes(
 
     # Account for queued requests
     for request in request_queue:
-        duration = charging_time_minutes(
-            request.get("required_energy", 0.0),
-            request.get("max_charging_rate", cs_max_charging_rate),
+        _append_request_duration_to_earliest_door(
+            door_available_at,
+            request,
             cs_max_charging_rate,
         )
-        next_door = min(range(doors), key=lambda idx: door_available_at[idx])
-        door_available_at[next_door] += duration
+
+    # Account for pending ACCEPT proposals as temporary reservations.
+    for request in _build_pending_reservation_requests(pending_proposals, now_value):
+        _append_request_duration_to_earliest_door(
+            door_available_at,
+            request,
+            cs_max_charging_rate,
+        )
+
+    # Optional: account for incoming requests, disabled by default to avoid overestimation.
+    if include_incoming_requests:
+        for request in _build_incoming_requests_for_estimate(incoming_requests):
+            _append_request_duration_to_earliest_door(
+                door_available_at,
+                request,
+                cs_max_charging_rate,
+            )
 
     return min(door_available_at)
