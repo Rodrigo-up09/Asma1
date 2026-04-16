@@ -79,6 +79,20 @@ def _collect_active_jids(cs_deployment, ev_deployment) -> list:
     return jids
 
 
+def _collect_cs_positions(cs_deployment) -> dict:
+    """Return CS position map: jid -> {x, y} for enabled stations."""
+    positions = {}
+    for cs in cs_deployment:
+        if not cs.get("enabled", True):
+            continue
+        cfg = cs["config"]
+        positions[cs["jid"]] = {
+            "x": float(cfg.get("x", 0.0)),
+            "y": float(cfg.get("y", 0.0)),
+        }
+    return positions
+
+
 def _generate_scenario_cs_deployment(scenario) -> list[dict]:
     """Create CS deployment from scenario configuration."""
     deployment = []
@@ -162,6 +176,7 @@ async def main():
         cs_deployment = _generate_scenario_cs_deployment(selected_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(selected_scenario, cs_stations)
+        scenario_type = selected_scenario.__class__.__name__
     else:
         # ── Use default random simulation (with main.py parameters) ──
         print(f"\n🎲 Using default random simulation\n")
@@ -173,6 +188,7 @@ async def main():
         cs_deployment = _generate_scenario_cs_deployment(random_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(random_scenario, cs_stations)
+        scenario_type = random_scenario.__class__.__name__
 
     active_cs_agents = []
     active_ev_agents = []
@@ -207,11 +223,14 @@ async def main():
 
     # ── World Agent ──────────────────────────────────────────────────
     all_agent_jids = _collect_active_jids(cs_deployment, ev_deployment)
+    cs_positions = _collect_cs_positions(cs_deployment)
     world_agent = WorldAgent(
         jid=WORLD_JID,
         password=WORLD_PASSWORD,
         agent_jids=all_agent_jids,
         world_clock=world_clock,
+        cs_positions=cs_positions,
+        scenario_type=scenario_type,
     )
     await world_agent.start()
 
