@@ -5,6 +5,7 @@ from spade.behaviour import State
 from .constants import (
     STATE_CHARGING,
     STATE_DRIVING,
+    STATE_STOPPED,
     TICK_SLEEP_SECONDS,
     send_stat,
 )

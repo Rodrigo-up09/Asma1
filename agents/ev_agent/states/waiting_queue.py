@@ -4,6 +4,7 @@ from spade.behaviour import State
 
 from .constants import (
     STATE_CHARGING,
+    STATE_STOPPED,
     STATE_WAITING_QUEUE,
     send_stat,
 )
@@ -13,9 +14,12 @@ class WaitingQueueState(State):
     async def run(self):
         agent = self.agent
         name = str(agent.jid).split("@")[0]
+        
+        # Get clock for deadline checking
+        clock = getattr(agent, "world_clock", None)
         t = (
-            agent.world_clock.formatted_time()
-            if hasattr(agent, "world_clock") and agent.world_clock
+            clock.formatted_time()
+            if clock
             else "??:??"
         )
 
