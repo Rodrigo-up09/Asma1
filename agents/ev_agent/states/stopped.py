@@ -1,9 +1,10 @@
 import asyncio
 import math
+import time
 
 from spade.behaviour import State
 
-from ..utils import closest_station
+from ..utils import closest_station, best_charging_station, score_charging_station, required_energy_kwh, calculate_arrival_time_hours
 from .constants import (
     STATE_DRIVING,
     STATE_GOING_TO_CHARGER,
@@ -44,13 +45,19 @@ class StoppedState(State):
 
     async def _handle_low_soc(self, name: str, t: str):
         """Check if SoC is critically low and needs immediate charging."""
-        if self.agent.current_soc <= self.agent.low_soc_threshold:
-            self.agent.current_cs_jid = None
+        agent = self.agent
+        if agent.current_soc <= agent.low_soc_threshold and not agent.current_cs_jid:
             print(
-                f"[{t}][{name}][STOPPED] SoC below {self.agent.low_soc_threshold:.0%}, heading to charger..."
+                f"[{t}][{name}][STOPPED] SoC below {agent.low_soc_threshold:.0%}, selecting CS..."
             )
-            self.set_next_state(STATE_GOING_TO_CHARGER)
-            return True
+            chosen = await self.agent.select_and_commit_cs(self)
+            if chosen:
+                self.set_next_state(STATE_GOING_TO_CHARGER)
+                return True
+            else:
+                print(f"[{t}][{name}][STOPPED] No CS available yet, will retry.")
+                await asyncio.sleep(1)
+                return False
         return False
 
     async def _get_next_stop_and_distances(self, t: str):
@@ -259,13 +266,18 @@ class StoppedState(State):
         
         if time_until_arrival <= total_travel_hours:
             if needs_charge_detour:
-                self.agent.current_cs_jid = None
+                # Need to charge first; select and commit to a CS if not already chosen
+                if not self.agent.current_cs_jid:
+                    print(
+                        f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
+                        f"(need charging detour). Selecting CS..."
+                    )
+                    chosen = await self.agent.select_and_commit_cs(self)
+                    if not chosen:
+                        print(f"[{t}][{name}][STOPPED] Could not secure CS, will retry.")
+                        return None
+                # else: already have a committed CS from earlier
                 self.agent.current_destination = next_stop
-                extra_time = detour_total_hours - travel_hours
-                print(
-                    f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
-                    f"(need charging detour, +{extra_time:.1f}h). Heading to charger first!"
-                )
                 return STATE_GOING_TO_CHARGER
             else:
                 print(
@@ -279,7 +291,7 @@ class StoppedState(State):
         time_until_leave = time_until_arrival - total_travel_hours
         charge_note = " ⚡needs charge" if needs_charge_detour else ""
         target_hour = next_stop["hour"]
-        # Display time-of-day by wrapping at 24 hours
+        # Display time-of-day (wrap at 24h)
         display_h = int(target_hour) % 24
         display_m = int((target_hour % 1) * 60)
         print(

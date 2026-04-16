@@ -1,4 +1,5 @@
 import json
+import time
 
 from typing import Optional
 
@@ -104,6 +105,100 @@ class EVAgent(Agent):
 
         self.messaging_service = EVMessagingService()
         self.world_clock = None
+        self._day_offset = 0  # whole days elapsed since start for daily schedule
+
+    async def select_and_commit_cs(self, state) -> str | None:
+        """Broadcast CS info request, pick the best CS, and send a commitment.
+        Returns the chosen CS JID on success, or None if none available."""
+        stations = self.cs_stations
+        if not stations:
+            return None
+
+        name = str(self.jid).split("@")[0]
+        t = self.world_clock.formatted_time() if self.world_clock else "??:??"
+
+        # Broadcast info query to all CS JIDs
+        for st in stations:
+            await self.messaging_service.send_info_query(state, st["jid"])
+
+        # Collect responses briefly
+        responses = {}
+        deadline = time.monotonic() + 0.3
+        while time.monotonic() < deadline and len(responses) < len(stations):
+            msg = await state.receive(timeout=0.05)
+            if msg:
+                info = self.messaging_service.parse_info_response(msg)
+                if info:
+                    responses[info["jid"]] = info
+
+        # Build station_infos for scoring
+        def build_info(st):
+            jid = st["jid"]
+            if jid in responses:
+                r = responses[jid]
+                return {
+                    "jid": jid,
+                    "x": r["x"],
+                    "y": r["y"],
+                    "electricity_price": r["electricity_price"],
+                    "used_doors": r["used_doors"],
+                    "num_doors": r["num_doors"],
+                }
+            else:
+                return {
+                    "jid": jid,
+                    "x": st["x"],
+                    "y": st["y"],
+                    "electricity_price": st.get("electricity_price", 0.15),
+                    "used_doors": 0,
+                    "num_doors": st.get("num_doors", 2),
+                }
+
+        from .utils import score_charging_station
+        station_infos = [build_info(st) for st in stations]
+
+        # Rank candidates
+        candidates = []
+        for info in station_infos:
+            score = score_charging_station(self.x, self.y, info)
+            candidates.append((score, info["jid"], info))
+        candidates.sort(key=lambda x: x[0])
+
+        # Compute required energy
+        from .utils import required_energy_kwh, calculate_arrival_time_hours
+        target_soc = getattr(self, "_trip_target_soc", self.target_soc)
+        required_energy = required_energy_kwh(self.current_soc, target_soc, self.battery_capacity_kwh)
+
+        # Try candidates in order
+        for score, jid, info in candidates:
+            cs_pos = info
+            arrival_hours = calculate_arrival_time_hours(
+                self.x, self.y, {"x": cs_pos["x"], "y": cs_pos["y"]}, self.velocity, self.world_clock
+            )
+            await self.messaging_service.send_commit(
+                state,
+                jid,
+                str(self.jid).split("/")[0],
+                required_energy,
+                arrival_hours,
+            )
+            msg = await state.receive(timeout=0.2)
+            if msg:
+                data = self.messaging_service.parse_response(msg)
+                if data and data.get("status") == "commit_accepted":
+                    print(f"[{t}][{name}][SELECT] Committed to {jid} (req {required_energy:.1f} kWh)")
+                    self.current_cs_jid = jid
+                    return jid
+                else:
+                    print(f"[{t}][{name}][SELECT] Commit rejected by {jid}, trying next...")
+                    continue
+            else:
+                print(f"[{t}][{name}][SELECT] No explicit ACK from {jid}, assuming committed.")
+                self.current_cs_jid = jid
+                return jid
+
+        print(f"[{t}][{name}][SELECT] All CSs rejected commitment.")
+        return None
 
     def mark_deadline_missed(self):
         """Advance schedule index to skip the destination that was just missed."""

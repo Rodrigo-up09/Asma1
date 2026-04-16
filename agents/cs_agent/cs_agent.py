@@ -81,10 +81,12 @@ class CSAgent(Agent):
         self.y = config.y
 
         self.used_doors = 0
+        self.reserved_doors = 0  # doors reserved by EVs that committed but haven't arrived
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.incoming_requests = {}  # EV JID -> {arriving_hours, required_energy, max_rate}
         self.pending_proposals = {}  # EV JID -> {proposal_data, decision} awaiting confirmation
+        self.expected_evs = set()     # EV JIDs that committed and are expected to arrive
         self.messaging_service = CSMessagingService()
         self.world_clock = None
         self._last_solar_update_sim_hours = None
@@ -133,10 +135,10 @@ class CSAgent(Agent):
 
     def can_accept_request(self, request):
         ev_jid = request.get("ev_jid")
+        # Accept if: not already charging, and used + reserved doors leaves a free door
         return (
             ev_jid not in self.active_charging
-            and self.used_doors < self.num_doors
-            
+            and (self.used_doors + self.reserved_doors) < self.num_doors
         )
 
     async def accept_request(self, request, state, from_queue=False):

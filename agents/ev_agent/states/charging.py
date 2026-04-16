@@ -72,6 +72,8 @@ class ChargingState(State):
                 self,
                 to_jid=agent.current_cs_jid,
             )
+            # Done with this CS; clear reference for next charging event
+            agent.current_cs_jid = None
             self.set_next_state(STATE_DRIVING)
             return
 

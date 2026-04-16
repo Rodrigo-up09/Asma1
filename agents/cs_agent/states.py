@@ -103,12 +103,44 @@ class CSStateMixin:
             print(f"[CS] Ignored duplicate request from {ev_jid} (already charging)")
             return
 
-        # Determine decision (accept or wait)
+        # Special handling: EV previously committed to this CS (pre-reserved spot)
+        if ev_jid in agent.expected_evs:
+            agent.expected_evs.remove(ev_jid)
+            agent.reserved_doors = max(0, agent.reserved_doors - 1)
+            # Accept immediately; door already counted, just increment used_doors
+            agent.used_doors += 1
+            required = parsed.get("required_energy", 0.0)
+            if agent.actual_solar_capacity >= required:
+                agent.actual_solar_capacity -= required
+            # Calculate price with solar discount
+            discount = agent.solar_discount()
+            final_price = required * agent.energy_price * (1 - discount)
+            agent.active_charging[ev_jid] = {
+                "required_energy": required,
+                "rate": parsed.get("max_charging_rate", agent.max_charging_rate),
+                "price": final_price,
+            }
+            await agent.messaging_service.send_response(
+                self,
+                ev_jid,
+                "accept",
+                extra={
+                    "price": final_price,
+                    "solar_discount": discount,
+                    "energy_price": agent.energy_price,
+                }
+            )
+            print(
+                f"[CS] {ev_jid} CONFIRMED (pre-reserved) | Doors: {agent.used_doors}/{agent.num_doors}"
+            )
+            await _report_load(self)
+            return
+
+        # Normal flow: determine accept or wait
         if agent.can_accept_request(parsed):
             decision = "accept"
         else:
             decision = "wait"
-
             # Add to incoming requests for tracking
             arriving_hours = parsed.get("arriving_hours")
             if arriving_hours is not None:
@@ -143,6 +175,95 @@ class CSStateMixin:
         print(
             f"[CS] Proposed {decision.upper()} to {ev_jid} | Pending: {len(agent.pending_proposals)}"
         )
+
+    async def _on_query(self, msg):
+        """Handle CS info request from EV.
+        EV asks for current station status (used_doors, num_doors, electricity_price, x, y).
+        """
+        agent = self.agent
+        try:
+            data = json.loads(msg.body) if msg.body else {}
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        if data.get("type") != "cs_info_request":
+            return
+
+        ev_jid = str(msg.sender).split("/")[0] if msg.sender else "unknown"
+
+        response = {
+            "type": "cs_info_response",
+            "jid": str(agent.jid).split("/")[0],
+            "used_doors": agent.used_doors,
+            "num_doors": agent.num_doors,
+            "electricity_price": agent.electricity_price,
+            "x": agent.x,
+            "y": agent.y,
+        }
+
+        reply = Message(to=str(msg.sender))
+        reply.set_metadata("protocol", agent.messaging_service.EV_PROTOCOL)
+        reply.set_metadata("performative", "inform")
+        reply.body = json.dumps(response)
+        await self.send(reply)
+        print(f"[CS] Sent info to {ev_jid}: {agent.used_doors}/{agent.num_doors} doors, {agent.electricity_price:.3f} €/kWh")
+
+    async def _on_commit(self, msg):
+        """Handle EV commitment to visit this CS.
+        The EV reserves a spot before traveling; we track it in expected_evs.
+        Sends a response indicating acceptance or rejection.
+        """
+        agent = self.agent
+        try:
+            data = json.loads(msg.body) if msg.body else {}
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        if data.get("type") != "ev_commit":
+            return
+
+        ev_jid = data.get("ev_jid")
+        if not ev_jid:
+            return
+
+        # Already expected? ignore (idempotent) and re-confirm
+        if ev_jid in agent.expected_evs:
+            print(f"[CS] {ev_jid} already committed")
+            await agent.messaging_service.send_response(self, ev_jid, "commit_accepted")
+            return
+
+        # Reserve a door (count against capacity)
+        if (agent.used_doors + agent.reserved_doors) < agent.num_doors:
+            agent.expected_evs.add(ev_jid)
+            agent.reserved_doors += 1
+            print(f"[CS] {ev_jid} committed (reserved {agent.reserved_doors}/{agent.num_doors} doors)")
+            await agent.messaging_service.send_response(self, ev_jid, "commit_accepted")
+        else:
+            # Station is fully reserved; cannot accept commitment
+            print(f"[CS] {ev_jid} commit REJECTED — no available doors")
+            await agent.messaging_service.send_response(self, ev_jid, "commit_rejected", extra={"reason": "no_available_doors"})
+
+    async def _on_cancel(self, msg):
+        """Handle EV cancellation of a prior commitment."""
+        agent = self.agent
+        try:
+            data = json.loads(msg.body) if msg.body else {}
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        if data.get("type") != "ev_cancel":
+            return
+
+        ev_jid = data.get("ev_jid")
+        if not ev_jid:
+            return
+
+        if ev_jid in agent.expected_evs:
+            agent.expected_evs.remove(ev_jid)
+            agent.reserved_doors = max(0, agent.reserved_doors - 1)
+            print(f"[CS] {ev_jid} canceled commitment (reserved now {agent.reserved_doors}/{agent.num_doors} doors)")
+        else:
+            print(f"[CS] {ev_jid} cancel but no commitment found")
 
     async def _on_inform(self, msg):
         agent = self.agent

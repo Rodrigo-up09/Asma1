@@ -7,7 +7,6 @@ from ..utils import (
     apply_energy_drain,
     calculate_arrival_time_hours,
     closest_station,
-    best_charging_station,
     get_station_position,
     handle_cs_proposal,
     move_towards,
@@ -192,18 +191,17 @@ class GoingToChargerState(State):
 
         # ── Phase 0: Pick target CS if not selected ──
         if not agent.current_cs_jid:
-            best_jid, score = best_charging_station(agent.x, agent.y, agent.cs_stations)
-            if not best_jid:
+            chosen = await agent.select_and_commit_cs(self)
+            if not chosen:
                 print(
-                    f"[{t}][{name}][GOING_TO_CHARGER] No charging stations configured. "
-                    "Retrying in 3s..."
+                    f"[{t}][{name}][GOING_TO_CHARGER] Could not secure CS, retrying in 3s..."
                 )
                 await asyncio.sleep(3)
                 self.set_next_state(STATE_GOING_TO_CHARGER)
                 return
-            agent.current_cs_jid = best_jid
+            # chosen CS stored in agent.current_cs_jid by select_and_commit_cs
             print(
-                f"[{t}][{name}][GOING_TO_CHARGER] Selected {best_jid} (score={score:.1f})"
+                f"[{t}][{name}][GOING_TO_CHARGER] Committed to {agent.current_cs_jid}"
             )
 
         cs_pos = get_station_position(agent.cs_stations, agent.current_cs_jid)
