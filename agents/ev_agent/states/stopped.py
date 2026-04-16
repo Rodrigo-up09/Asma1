@@ -240,7 +240,13 @@ class StoppedState(State):
     async def _make_departure_decision(self, next_stop: dict, needs_charge_detour: bool, 
                                        travel_hours: float, detour_total_hours: float,
                                        time_until_arrival: float, t: str, name: str):
-        """Decide whether to depart now and which route to take."""
+        """Decide whether to depart now and which route to take.
+        
+        Returns
+        -------
+        next_state : str or None
+            STATE_DRIVING, STATE_GOING_TO_CHARGER, or None to remain STOPPED.
+        """
         total_travel_hours = detour_total_hours if needs_charge_detour else travel_hours
         
         print(
@@ -260,26 +266,29 @@ class StoppedState(State):
                     f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
                     f"(need charging detour, +{extra_time:.1f}h). Heading to charger first!"
                 )
-                self.set_next_state(STATE_GOING_TO_CHARGER)
+                return STATE_GOING_TO_CHARGER
             else:
                 print(
                     f"[{t}][{name}][STOPPED] Time to leave for \"{next_stop['name']}\" "
                     f"(travel time ≈ {travel_hours:.1f}h)"
                 )
                 self.agent.current_destination = next_stop
-                self.set_next_state(STATE_DRIVING)
-            return
+                return STATE_DRIVING
         
         # Still waiting - log status
         time_until_leave = time_until_arrival - total_travel_hours
         charge_note = " ⚡needs charge" if needs_charge_detour else ""
         target_hour = next_stop["hour"]
+        # Display time-of-day by wrapping at 24 hours
+        display_h = int(target_hour) % 24
+        display_m = int((target_hour % 1) * 60)
         print(
             f"[{t}][{name}][STOPPED] Parked | "
             f"SoC: {self.agent.current_soc:.0%} | "
-            f"next: \"{next_stop['name']}\" at {int(target_hour):02d}:{int((target_hour % 1) * 60):02d} "
+            f"next: \"{next_stop['name']}\" at {display_h:02d}:{display_m:02d} "
             f"(leaving in ~{time_until_leave:.1f}h){charge_note}"
         )
+        return None
 
     def _log_parked_no_schedule(self, t: str, name: str):
         """Log status when parked with no upcoming schedule."""
@@ -316,10 +325,13 @@ class StoppedState(State):
             )
             
             # Make departure decision
-            await self._make_departure_decision(
+            next_state = await self._make_departure_decision(
                 next_stop, needs_charge_detour, travel_hours, detour_total_hours,
                 time_until_arrival, t, name
             )
+            if next_state is not None:
+                self.set_next_state(next_state)
+                return
         else:
             # No schedule - just log status
             self._log_parked_no_schedule(t, name)

@@ -107,17 +107,6 @@ class GoingToChargerState(State):
         # Wait for response
         reply = await self.receive(timeout=10)
         if not reply:
-            # Check if deadline passed while waiting
-            if agent.current_destination and agent.current_destination.get("hour") is not None:
-                if agent.current_destination["hour"] <= agent.world_clock.sim_hours:
-                    print(
-                        f"[{agent.world_clock.formatted_time()}][{str(agent.jid).split('@')[0]}][GOING_TO_CHARGER] "
-                        f"Deadline passed while waiting for CS response. Abandoning."
-                    )
-                    agent.current_destination = None
-                    agent.current_cs_jid = None
-                    return None  # Will trigger STATE_STOPPED in calling code
-            
             print(
                 f"[{t}][{name}][GOING_TO_CHARGER] Timeout waiting CS response. "
                 "Retrying in 3s..."
@@ -201,21 +190,6 @@ class GoingToChargerState(State):
         time_before = clock.sim_hours
         t = clock.formatted_time()
 
-        # Check if deadline has been missed
-        target = agent.current_destination
-        if target and target.get("hour") is not None:
-            if target["hour"] <= clock.sim_hours:
-                # Deadline has passed — abandon charging attempt
-                print(
-                    f"[{t}][{name}][GOING_TO_CHARGER] Deadline for \"{target['name']}\" at "
-                    f"{int(target['hour']):02d}:{int((target['hour'] % 1) * 60):02d} has passed! "
-                    "Abandoning trip to charger and returning to STOPPED."
-                )
-                agent.current_destination = None
-                agent.current_cs_jid = None
-                self.set_next_state(STATE_STOPPED)
-                return
-
         # ── Phase 0: Pick target CS if not selected ──
         if not agent.current_cs_jid:
             best_jid, score = best_charging_station(agent.x, agent.y, agent.cs_stations)
@@ -253,7 +227,12 @@ class GoingToChargerState(State):
         )
         
         if response_data is None:
-            self.set_next_state(STATE_GOING_TO_CHARGER)
+            # If deadline was missed while waiting, destination and cs_jid were cleared
+            # and we should transition to STOPPED. Otherwise, retry GOING_TO_CHARGER.
+            if agent.current_destination is None and agent.current_cs_jid is None:
+                self.set_next_state(STATE_STOPPED)
+            else:
+                self.set_next_state(STATE_GOING_TO_CHARGER)
             return
         
         # ── Phase 3: Process response and confirm proposal ──

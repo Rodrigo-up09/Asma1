@@ -23,21 +23,6 @@ class WaitingQueueState(State):
             else "??:??"
         )
 
-        # Check if deadline has been missed
-        target = agent.current_destination
-        if target and target.get("hour") is not None and clock:
-            if target["hour"] <= clock.sim_hours:
-                # Deadline has passed — leave queue and return to STOPPED
-                print(
-                    f"[{t}][{name}][WAITING_QUEUE] Deadline for \"{target['name']}\" at "
-                    f"{int(target['hour']):02d}:{int((target['hour'] % 1) * 60):02d} has passed! "
-                    "Leaving queue and returning to STOPPED."
-                )
-                agent.current_destination = None
-                agent.current_cs_jid = None
-                self.set_next_state(STATE_STOPPED)
-                return
-
         reply = await self.receive(timeout=30)
 
         if not reply:

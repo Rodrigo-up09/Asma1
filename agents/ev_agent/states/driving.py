@@ -29,20 +29,6 @@ class DrivingState(State):
         time_before = clock.sim_hours
         t = clock.formatted_time()
 
-        # Check if deadline has been missed
-        target = agent.current_destination
-        if target and target.get("hour") is not None:
-            if target["hour"] <= clock.sim_hours:
-                # Deadline has passed — abandon this destination
-                print(
-                    f"[{t}][{name}][DRIVING] Deadline for \"{target['name']}\" at "
-                    f"{int(target['hour']):02d}:{int((target['hour'] % 1) * 60):02d} has passed! "
-                    "Abandoning and returning to STOPPED."
-                )
-                agent.current_destination = None
-                self.set_next_state(STATE_STOPPED)
-                return
-
         # Use the locked-in destination, not next_target() which can change
         target = agent.current_destination
 
@@ -99,6 +85,13 @@ class DrivingState(State):
             else:
                 # Arrived at destination → park and wait for next scheduled departure
                 agent.current_destination = None  # Clear the destination
+                # Advance schedule index to the next stop
+                if agent.schedule:
+                    old_index = agent.current_target_index
+                    agent.current_target_index = (old_index + 1) % len(agent.schedule)
+                    # If we wrapped to the first stop, a new day has started
+                    if agent.current_target_index == 0:
+                        agent._day_offset += 1
                 print(
                     f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
                     f"pos=({agent.x:.1f}, {agent.y:.1f})"

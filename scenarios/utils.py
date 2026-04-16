@@ -6,10 +6,11 @@ import random
 
 
 def generate_scenario_schedule(home_x, home_y, spots, num_stops=None):
-    """Generate a schedule with fixed daily time slots and random destinations.
+    """Generate a recurring daily schedule with fixed time slots and random destinations.
     
     Each EV has 4 fixed appointment times per day. For each time slot,
-    a random destination is selected from available spots.
+    a random destination is selected from available spots. The schedule
+    repeats every day; hours are within [0, 24).
     
     Args:
         home_x: Home x position
@@ -18,7 +19,7 @@ def generate_scenario_schedule(home_x, home_y, spots, num_stops=None):
         num_stops: Number of stops per day (default 4)
     
     Returns:
-        List of schedule destinations (repeating for 7 days)
+        List of schedule destinations for one day.
     """
     if num_stops is None:
         num_stops = 4
@@ -31,8 +32,7 @@ def generate_scenario_schedule(home_x, home_y, spots, num_stops=None):
     
     schedule = []
     
-# Generate schedule for SEVEN days to ensure continuous movement
-    # For each time slot, pick a random destination
+    # Generate schedule for ONE day; it will repeat daily via next_target logic
     for time_slot in base_times:
         spot = random.choice(spots)
         schedule.append({
@@ -43,7 +43,7 @@ def generate_scenario_schedule(home_x, home_y, spots, num_stops=None):
             "type": "destination",
         })
     
-    # Return home at end of each day (20:00)
+    # Return home at end of day (20:00)
     schedule.append({
         "name": "Home",
         "x": home_x,

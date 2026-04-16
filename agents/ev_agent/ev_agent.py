@@ -93,6 +93,7 @@ class EVAgent(Agent):
             key=lambda s: s["hour"],
         )
         self.current_target_index = 0
+        self._day_offset = 0  # whole days elapsed since start (for recurring schedule)
         self.current_destination = None  # The destination we're currently heading to
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
@@ -104,32 +105,29 @@ class EVAgent(Agent):
         self.messaging_service = EVMessagingService()
         self.world_clock = None
 
+    def mark_deadline_missed(self):
+        """Advance schedule index to skip the destination that was just missed."""
+        if self.schedule:
+            self.current_target_index = (self.current_target_index + 1) % len(self.schedule)
+        # Clear any trip-specific charging target associated with the missed trip
+        if hasattr(self, "_trip_target_soc"):
+            delattr(self, "_trip_target_soc")
+
     def next_target(self):
-        """Return the next scheduled destination based on world clock time.
+        """Return the next scheduled destination (current_target_index) with absolute hour.
         
-        Handles repeating multi-day schedules by comparing unbounded sim_hours
-        against schedule hours that may extend across multiple days.
+        The schedule repeats daily. The returned stop's hour is adjusted by the
+        current day offset to give an absolute simulation time.
         """
         if not self.schedule:
             return None
+        stop = self.schedule[self.current_target_index]
+        result = stop.copy()
+        # Apply day offset to get absolute hour
+        result["hour"] = stop["hour"] + 24 * self._day_offset
+        return result
 
-        clock = getattr(self, "world_clock", None)
-        if not clock:
-            return self.schedule[self.current_target_index]
 
-        # Use unbounded sim_hours for comparison, not time_of_day which wraps at 24
-        now_sim_hours = clock.sim_hours
-        
-        # Find the next stop whose hour hasn't passed yet
-        for i, stop in enumerate(self.schedule):
-            if stop["hour"] > now_sim_hours:
-                self.current_target_index = i
-                return stop
-
-        # All stops in schedule passed → wrap to first stop (next cycle)
-        # This shouldn't happen with a properly designed schedule, but is a safety fallback
-        self.current_target_index = 0
-        return self.schedule[0]
 
     def next_after(self, target):
         """Return the schedule entry that comes after `target`.

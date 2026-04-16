@@ -72,10 +72,10 @@ def _rand_pos():
 
 
 def _generate_schedule(home_x, home_y, num_destinations=3, night=False):
-    """Build a schedule with 4 fixed daily deadlines and random destinations.
+    """Build a daily recurring schedule with 4 fixed appointment times and random destinations.
     
     Each EV has 4 fixed appointment times per day, with random destination picks.
-    Repeats for 7 days ensuring continuous movement.
+    The schedule repeats daily; times are within 0–24.
     
     Args:
         home_x: Home x position
@@ -93,28 +93,26 @@ def _generate_schedule(home_x, home_y, num_destinations=3, night=False):
     
     schedule = []
     
-    # Generate schedule for SEVEN days
-    for day in range(7):
-        # For each time slot, pick a random destination
-        for time_slot in daily_times:
-            building = random.choice(buildings)
-            schedule.append({
-                "name": building["name"],
-                "x": building["x"],
-                "y": building["y"],
-                "hour": time_slot + (day * 24.0),
-                "type": "destination",
-            })
-        
-        # Return home at end of each day
-        home_hour = 20.0 + (day * 24.0) if not night else 6.0 + (day * 24.0)
+    # Generate schedule for ONE day; it will repeat via next_target logic
+    for time_slot in daily_times:
+        building = random.choice(buildings)
         schedule.append({
-            "name": "Home",
-            "x": home_x,
-            "y": home_y,
-            "hour": home_hour,
+            "name": building["name"],
+            "x": building["x"],
+            "y": building["y"],
+            "hour": time_slot,
             "type": "destination",
         })
+    
+    # Return home at end of day
+    home_hour = 20.0 if not night else 6.0
+    schedule.append({
+        "name": "Home",
+        "x": home_x,
+        "y": home_y,
+        "hour": home_hour,
+        "type": "destination",
+    })
     
     return schedule
 

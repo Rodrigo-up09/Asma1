@@ -26,21 +26,6 @@ class ChargingState(State):
         time_before = clock.sim_hours
         t = clock.formatted_time()
 
-        # Check if deadline has been missed
-        target = agent.current_destination
-        if target and target.get("hour") is not None:
-            if target["hour"] <= clock.sim_hours:
-                # Deadline has passed — stop charging and abandon
-                print(
-                    f"[{t}][{name}][CHARGING] Deadline for \"{target['name']}\" at "
-                    f"{int(target['hour']):02d}:{int((target['hour'] % 1) * 60):02d} has passed! "
-                    "Stopping charge early and returning to STOPPED."
-                )
-                agent.current_destination = None
-                agent.current_cs_jid = None
-                self.set_next_state(STATE_STOPPED)
-                return
-
         # Wait for real time to pass, then calculate actual sim time elapsed
         await asyncio.sleep(TICK_SLEEP_SECONDS)
         time_after = clock.sim_hours
