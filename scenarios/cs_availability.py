@@ -1,65 +1,16 @@
 """
-Legacy scenarios module - imports from scenarios package for backward compatibility.
-New code should import directly from the scenarios package.
-
-This file is kept for compatibility with existing code that imports from scenarios.py
+CS Availability Scenario:
+Multiple EVs with 2 CS - one close but with limited doors, one farther but more available.
+Tests if EVs will choose the farther free CS when the closer one is full.
 """
 
-# Import everything from the scenarios package
-from scenarios import (
-    Scenario,
-    PriceComparison,
-    CSAvailability,
-    RandomScenario,
-    SCENARIOS,
-    get_scenario_by_index,
-    display_menu,
-    generate_scenario_schedule,
-    generate_hourly_schedule,
-)
+import random
+from agents.cs_agent import CSConfig
+from .base import Scenario
+from .utils import generate_hourly_schedule
 
-__all__ = [
-    "Scenario",
-    "PriceComparison",
-    "CSAvailability",
-    "RandomScenario",
-    "SCENARIOS",
-    "get_scenario_by_index",
-    "display_menu",
-    "generate_scenario_schedule",
-    "generate_hourly_schedule",
-]
-"""
-Legacy scenarios module - imports from scenarios package for backward compatibility.
-New code should import directly from the scenarios package.
 
-This file is kept for compatibility with existing code that imports from scenarios.py
-"""
-
-# Import everything from the scenarios package
-from scenarios import (
-    Scenario,
-    PriceComparison,
-    CSAvailability,
-    RandomScenario,
-    SCENARIOS,
-    get_scenario_by_index,
-    display_menu,
-    generate_scenario_schedule,
-    generate_hourly_schedule,
-)
-
-__all__ = [
-    "Scenario",
-    "PriceComparison",
-    "CSAvailability",
-    "RandomScenario",
-    "SCENARIOS",
-    "get_scenario_by_index",
-    "display_menu",
-    "generate_scenario_schedule",
-    "generate_hourly_schedule",
-]
+class CSAvailability(Scenario):
     """
     Multiple EVs with 2 CS - one close but with limited doors, one farther but more available.
     Tests if EVs will choose the farther free CS when the closer one is full.
@@ -132,7 +83,7 @@ __all__ = [
             home_y = random.uniform(-20, 20)
             
             # Generate hourly schedule for maximum chaos
-            schedule = _generate_hourly_schedule(home_x, home_y, self.spots)
+            schedule = generate_hourly_schedule(home_x, home_y, self.spots)
             
             config = base_configs[i - 1]
             self.ev_configs.append({
@@ -151,47 +102,3 @@ __all__ = [
                     "is_night_driver": False,
                 },
             })
-
-
-# Registry of all available scenarios
-SCENARIOS = [
-    PriceComparison(),
-    CSAvailability(),
-]
-
-
-def get_scenario_by_index(index: int):
-    """Get a scenario by index. Returns None if index is out of range."""
-    if 0 <= index < len(SCENARIOS):
-        return SCENARIOS[index]
-    return None
-
-
-def display_menu():
-    """Display scenario selection menu and return user choice."""
-    print("\n" + "=" * 70)
-    print("ASMA Simulation - Scenario Selection")
-    print("=" * 70)
-    print("\nAvailable Scenarios:\n")
-    
-    for i, scenario in enumerate(SCENARIOS):
-        print(f"  [{i + 1}] {scenario.name}")
-        print(f"      {scenario.description}")
-        print()
-    
-    print(f"  [0] Default Simulation (20 EVs, 3 CS, mixed drivers)")
-    print()
-    
-    while True:
-        try:
-            choice = input("Select scenario (0-" + str(len(SCENARIOS)) + "): ").strip()
-            choice_int = int(choice)
-            
-            if choice_int == 0:
-                return None  # Default scenario
-            elif 1 <= choice_int <= len(SCENARIOS):
-                return SCENARIOS[choice_int - 1]
-            else:
-                print(f"Invalid choice. Please enter a number between 0 and {len(SCENARIOS)}.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
