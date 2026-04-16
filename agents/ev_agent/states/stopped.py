@@ -75,16 +75,17 @@ class StoppedState(State):
         
         travel_hours = _estimate_travel_hours(dist, self.agent.velocity, tick_sim_hours)
         
-        now = clock.time_of_day
+        # Use sim_hours (unbounded) for time calculations, not time_of_day (wrapped)
+        now = clock.sim_hours
         return travel_hours, tick_sim_hours, now
 
     def _calculate_time_until_arrival(self, target_hour: float, now: float):
-        """Calculate hours remaining until target arrival time."""
-        if target_hour > now:
-            return target_hour - now
-        else:
-            # Next stop is tomorrow (day wrap)
-            return (24.0 - now) + target_hour
+        """Calculate hours remaining until target arrival time.
+        
+        With multi-day schedules, both target_hour and now can be unbounded.
+        Simply return the difference.
+        """
+        return target_hour - now
 
     async def _handle_charging_detour(self, next_stop: dict, dist: float, travel_hours: float, 
                                      tick_sim_hours: float, time_until_arrival: float, t: str, name: str):

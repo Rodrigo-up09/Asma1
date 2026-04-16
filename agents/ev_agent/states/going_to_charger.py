@@ -7,6 +7,7 @@ from ..utils import (
     apply_energy_drain,
     calculate_arrival_time_hours,
     closest_station,
+    best_charging_station,
     get_station_position,
     handle_cs_proposal,
     move_towards,
@@ -106,6 +107,17 @@ class GoingToChargerState(State):
         # Wait for response
         reply = await self.receive(timeout=10)
         if not reply:
+            # Check if deadline passed while waiting
+            if agent.current_destination and agent.current_destination.get("hour") is not None:
+                if agent.current_destination["hour"] <= agent.world_clock.sim_hours:
+                    print(
+                        f"[{agent.world_clock.formatted_time()}][{str(agent.jid).split('@')[0]}][GOING_TO_CHARGER] "
+                        f"Deadline passed while waiting for CS response. Abandoning."
+                    )
+                    agent.current_destination = None
+                    agent.current_cs_jid = None
+                    return None  # Will trigger STATE_STOPPED in calling code
+            
             print(
                 f"[{t}][{name}][GOING_TO_CHARGER] Timeout waiting CS response. "
                 "Retrying in 3s..."
@@ -189,10 +201,25 @@ class GoingToChargerState(State):
         time_before = clock.sim_hours
         t = clock.formatted_time()
 
+        # Check if deadline has been missed
+        target = agent.current_destination
+        if target and target.get("hour") is not None:
+            if target["hour"] <= clock.sim_hours:
+                # Deadline has passed — abandon charging attempt
+                print(
+                    f"[{t}][{name}][GOING_TO_CHARGER] Deadline for \"{target['name']}\" at "
+                    f"{int(target['hour']):02d}:{int((target['hour'] % 1) * 60):02d} has passed! "
+                    "Abandoning trip to charger and returning to STOPPED."
+                )
+                agent.current_destination = None
+                agent.current_cs_jid = None
+                self.set_next_state(STATE_STOPPED)
+                return
+
         # ── Phase 0: Pick target CS if not selected ──
         if not agent.current_cs_jid:
-            closest_jid, dist = closest_station(agent.x, agent.y, agent.cs_stations)
-            if not closest_jid:
+            best_jid, score = best_charging_station(agent.x, agent.y, agent.cs_stations)
+            if not best_jid:
                 print(
                     f"[{t}][{name}][GOING_TO_CHARGER] No charging stations configured. "
                     "Retrying in 3s..."
@@ -200,9 +227,9 @@ class GoingToChargerState(State):
                 await asyncio.sleep(3)
                 self.set_next_state(STATE_GOING_TO_CHARGER)
                 return
-            agent.current_cs_jid = closest_jid
+            agent.current_cs_jid = best_jid
             print(
-                f"[{t}][{name}][GOING_TO_CHARGER] Chose {closest_jid} (dist={dist:.1f})"
+                f"[{t}][{name}][GOING_TO_CHARGER] Selected {best_jid} (score={score:.1f})"
             )
 
         cs_pos = get_station_position(agent.cs_stations, agent.current_cs_jid)

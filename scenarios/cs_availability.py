@@ -7,7 +7,7 @@ Tests if EVs will choose the farther free CS when the closer one is full.
 import random
 from agents.cs_agent import CSConfig
 from .base import Scenario
-from .utils import generate_hourly_schedule
+from .utils import generate_scenario_schedule
 
 
 class CSAvailability(Scenario):
@@ -55,7 +55,7 @@ class CSAvailability(Scenario):
                 "jid": "cs2@localhost",
                 "password": "password",
                 "config": CSConfig(
-                    num_doors=1,  # AVAILABLE - 3 doors, always has space
+                    num_doors=1, 
                     max_charging_rate=12.0,
                     max_solar_capacity=150.0,
                     actual_solar_capacity=120.0,
@@ -83,7 +83,7 @@ class CSAvailability(Scenario):
             home_y = random.uniform(-20, 20)
             
             # Generate hourly schedule for maximum chaos
-            schedule = generate_hourly_schedule(home_x, home_y, self.spots)
+            schedule = generate_scenario_schedule(home_x, home_y, self.spots)
             
             config = base_configs[i - 1]
             self.ev_configs.append({

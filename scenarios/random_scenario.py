@@ -72,80 +72,63 @@ def _rand_pos():
 
 
 def _generate_schedule(home_x, home_y, num_destinations=3, night=False):
-    """Build a schedule with random selection from established world points.
+    """Build a schedule with 4 fixed daily deadlines and random destinations.
     
-    Each EV gets num_destinations random points from the fixed world locations
-    plus returns home at the end.
+    Each EV has 4 fixed appointment times per day, with random destination picks.
+    Repeats for 7 days ensuring continuous movement.
     
     Args:
         home_x: Home x position
         home_y: Home y position
-        num_destinations: Number of destinations to visit (default 3)
-        night: If True, use night buildings; otherwise day buildings
+        num_destinations: Unused (kept for compatibility) - always 4 stops per day
+        night: If True, use night shift times; otherwise day times
     """
     buildings = NIGHT_BUILDINGS if night else DAY_BUILDINGS
     
-    # Select random destinations from established world points
-    num_to_pick = min(num_destinations, len(buildings))
-    chosen = random.sample(buildings, num_to_pick)
-    
-    # Calculate time windows
+    # Fixed daily appointment times
     if night:
-        start_hour = random.uniform(20.0, 21.5)
-        end_hour = random.uniform(5.0, 7.0)
-        total_span = (24.0 - start_hour) + end_hour
+        daily_times = [19.0, 22.5, 1.0, 4.5]  # 19:00, 22:30, 01:00, 04:30
     else:
-        start_hour = random.uniform(7.5, 9.0)
-        end_hour = 20.0
-        total_span = end_hour - start_hour
-
-    # Distribute stops evenly across the time window
-    num_stops = num_to_pick + 1  # destinations + home
-    gap = total_span / num_stops
+        daily_times = [8.0, 11.5, 15.0, 18.5]  # 08:00, 11:30, 15:00, 18:30
     
-    stops = []
-    for i, bld in enumerate(chosen):
-        hour = start_hour + gap * i
-        if hour >= 24.0:
-            hour -= 24.0
-        stops.append(
-            {
-                "name": bld["name"],
-                "x": bld["x"],
-                "y": bld["y"],
-                "hour": round(hour, 1),
+    schedule = []
+    
+    # Generate schedule for SEVEN days
+    for day in range(7):
+        # For each time slot, pick a random destination
+        for time_slot in daily_times:
+            building = random.choice(buildings)
+            schedule.append({
+                "name": building["name"],
+                "x": building["x"],
+                "y": building["y"],
+                "hour": time_slot + (day * 24.0),
                 "type": "destination",
-            }
-        )
-    
-    # Final stop → Home
-    stops.append(
-        {
+            })
+        
+        # Return home at end of each day
+        home_hour = 20.0 + (day * 24.0) if not night else 6.0 + (day * 24.0)
+        schedule.append({
             "name": "Home",
             "x": home_x,
             "y": home_y,
-            "hour": round(end_hour, 1),
+            "hour": home_hour,
             "type": "destination",
-        }
-    )
+        })
     
-    # Sort by hour so the agent's next_target() logic works correctly
-    stops.sort(key=lambda s: s["hour"])
-    return stops
+    return schedule
 
-
-# ══════════════════════════════════════════════════════════════════════
-#  Random Scenario Class
-# ══════════════════════════════════════════════════════════════════════
 
 class RandomScenario(Scenario):
-    """
-    Randomly generated scenario with variable parameters.
-    Uses the same random generation logic as main.py with configurable NUM_EVS and NUM_CSS.
-    Creates diverse configurations for stress testing.
-    """
+    """Random scenario with configurable EVs, CS, and night driver ratio."""
     
-    def __init__(self, num_evs=20, num_css=3, night_driver_ratio=0.4):
+    def __init__(
+        self,
+        num_evs: int = 10,
+        num_css: int = 5,
+        night_driver_ratio: float = 0.3,
+    ):
+        """Initialize random scenario."""
         super().__init__(
             name="Random Scenario",
             description=f"Random simulation: {num_evs} EVs, {num_css} CS, {night_driver_ratio:.0%} night drivers.",

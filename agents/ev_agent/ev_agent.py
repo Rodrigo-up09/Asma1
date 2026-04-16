@@ -105,7 +105,11 @@ class EVAgent(Agent):
         self.world_clock = None
 
     def next_target(self):
-        """Return the next scheduled destination based on world clock time."""
+        """Return the next scheduled destination based on world clock time.
+        
+        Handles repeating multi-day schedules by comparing unbounded sim_hours
+        against schedule hours that may extend across multiple days.
+        """
         if not self.schedule:
             return None
 
@@ -113,14 +117,17 @@ class EVAgent(Agent):
         if not clock:
             return self.schedule[self.current_target_index]
 
-        now = clock.time_of_day
-        # Find the next stop whose hour hasn't passed yet today
+        # Use unbounded sim_hours for comparison, not time_of_day which wraps at 24
+        now_sim_hours = clock.sim_hours
+        
+        # Find the next stop whose hour hasn't passed yet
         for i, stop in enumerate(self.schedule):
-            if stop["hour"] > now:
+            if stop["hour"] > now_sim_hours:
                 self.current_target_index = i
                 return stop
 
-        # All stops passed for today → wrap to first stop (tomorrow)
+        # All stops in schedule passed → wrap to first stop (next cycle)
+        # This shouldn't happen with a properly designed schedule, but is a safety fallback
         self.current_target_index = 0
         return self.schedule[0]
 

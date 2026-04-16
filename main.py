@@ -7,7 +7,7 @@ from agents.ev_agent.utils import set_cs_selection_weights
 from agents.world_agent import WorldAgent
 from environment.world_clock import WorldClock
 from visualization.visualizer import WorldVisualizer
-from scenarios import display_menu, RandomScenario
+from scenarios import display_menu, RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
 
 # ══════════════════════════════════════════════════════════════════════
 #  ✏️  CHANGE THESE TWO NUMBERS TO SCALE THE SIMULATION

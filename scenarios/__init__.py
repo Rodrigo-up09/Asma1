@@ -6,7 +6,7 @@ Provides scenario selection, registration, and display functionality.
 from .base import Scenario
 from .price_comparison import PriceComparison
 from .cs_availability import CSAvailability
-from .random_scenario import RandomScenario
+from .random_scenario import RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
 from .utils import generate_scenario_schedule, generate_hourly_schedule
 
 # Registry of all available scenarios
