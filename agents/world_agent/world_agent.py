@@ -77,6 +77,9 @@ class WorldAgent(Agent):
         self.total_waiting_time: float = 0.0
         self.waiting_time_events: int = 0
 
+        self.soc_success_departures: int = 0
+        self.total_departures: int = 0
+
         self.current_load: float = 0.0
         self.peak_load: float = 0.0
 
@@ -91,6 +94,8 @@ class WorldAgent(Agent):
         self.daily_waiting_time: float = 0.0
         self.daily_waiting_events: int = 0
         self.daily_peak_load: float = 0.0
+        self.daily_soc_success_departures: int = 0
+        self.daily_total_departures: int = 0
         self.daily_baseline_peak_load: float = self.baseline_peak_load
 
     @staticmethod
@@ -150,6 +155,11 @@ class WorldAgent(Agent):
             if self.daily_baseline_peak_load > 0
             else 0.0
         )
+        soc_success_rate = (
+            (self.daily_soc_success_departures / self.daily_total_departures) * 100
+            if self.daily_total_departures > 0
+            else 0.0
+        )
         return {
             "energy_consumed": self.daily_energy_consumed,
             "charging_cost": self.daily_charging_cost,
@@ -158,6 +168,7 @@ class WorldAgent(Agent):
             "renewable_pct": renewable_pct,
             "peak_load": self.daily_peak_load,
             "peak_load_reduction": peak_load_reduction,
+            "soc_success_rate": soc_success_rate,
         }
 
     def reset_daily_metrics(self) -> None:
@@ -168,6 +179,8 @@ class WorldAgent(Agent):
         self.daily_waiting_time = 0.0
         self.daily_waiting_events = 0
         self.daily_peak_load = 0.0
+        self.daily_soc_success_departures = 0
+        self.daily_total_departures = 0
         self.daily_baseline_peak_load = self.baseline_peak_load
 
     async def setup(self) -> None:

@@ -150,8 +150,12 @@ class StatsListenerBehaviour(CyclicBehaviour):
             if current_load > agent.daily_peak_load:
                 agent.daily_peak_load = current_load
 
-
-class DailyMetricsLoggerBehaviour(PeriodicBehaviour):
+        elif event == "departure_soc_check":
+            agent.total_departures += 1
+            agent.daily_total_departures += 1
+            if bool(data.get("reached_target_soc", False)):
+                agent.soc_success_departures += 1
+                agent.daily_soc_success_departures += 1
     """Write one metrics snapshot per day into logs/<scenario>.txt."""
 
     def __init__(self, period: float = 1.0):

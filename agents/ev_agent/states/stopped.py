@@ -9,6 +9,7 @@ from .constants import (
     STATE_GOING_TO_CHARGER,
     STATE_STOPPED,
     TICK_SLEEP_SECONDS,
+    send_stat,
 )
 
 
@@ -258,6 +259,19 @@ class StoppedState(State):
         )
         
         if time_until_arrival <= total_travel_hours:
+            # ── Check SoC before departure ──
+            reached_target = self.agent.current_soc >= self.agent.target_soc
+            await send_stat(
+                self,
+                getattr(self.agent, "world_jid", None),
+                {
+                    "event": "departure_soc_check",
+                    "reached_target_soc": reached_target,
+                    "current_soc": round(self.agent.current_soc, 3),
+                    "target_soc": self.agent.target_soc,
+                },
+            )
+            
             if needs_charge_detour:
                 self.agent.current_cs_jid = None
                 self.agent.current_destination = next_stop
