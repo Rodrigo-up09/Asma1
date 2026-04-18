@@ -25,6 +25,7 @@ class ScenarioMetricsLogWriter:
             f"  Charging Sessions     : {metrics['charging_sessions']}",
             f"  Renewable Utilization : {metrics['renewable_pct']:.1f}%",
             f"  Peak Load             : {metrics['peak_load']:.2f} kW",
+            f"  Peak Load Reduction   : {metrics['peak_load_reduction']:.1f}%",
             "",
         ]
         with self.log_file_path.open("a", encoding="utf-8") as f:

@@ -41,6 +41,7 @@ class WorldAgent(Agent):
         agent_jids: List[str],
         world_clock: WorldClock,
         cs_positions: Dict[str, Dict[str, float]] | None = None,
+        cs_configs: Dict[str, Dict[str, float]] | None = None,
         scenario_type: str = "RandomScenario",
         *args,
         **kwargs,
@@ -54,6 +55,10 @@ class WorldAgent(Agent):
             str(k): {"x": float(v["x"]), "y": float(v["y"])}
             for k, v in (cs_positions or {}).items()
         }
+
+        # ── Baseline peak load calculation ──────────────
+        # Theoretical maximum load = sum of all CS doors * max_charging_rate
+        self.baseline_peak_load = self._calculate_baseline_peak_load(cs_configs or {})
 
         map_min_x, map_max_x, map_min_y, map_max_y = self._compute_map_bounds(self.cs_positions)
         self.world_model: WorldModel = WorldModel(
@@ -86,6 +91,23 @@ class WorldAgent(Agent):
         self.daily_waiting_time: float = 0.0
         self.daily_waiting_events: int = 0
         self.daily_peak_load: float = 0.0
+        self.daily_baseline_peak_load: float = self.baseline_peak_load
+
+    @staticmethod
+    def _calculate_baseline_peak_load(cs_configs: Dict[str, Dict[str, float]]) -> float:
+        """Calculate theoretical maximum load if all charging doors were active.
+        
+        Baseline = sum of (num_doors * max_charging_rate) for all charging stations.
+        """
+        total_capacity = 0.0
+        for config in cs_configs.values():
+            try:
+                num_doors = float(config.get("num_doors", 0))
+                max_rate = float(config.get("max_charging_rate", 0))
+                total_capacity += num_doors * max_rate
+            except (TypeError, ValueError, KeyError):
+                pass
+        return total_capacity
 
     @staticmethod
     def _compute_map_bounds(cs_positions: Dict[str, Dict[str, float]]) -> Tuple[float, float, float, float]:
@@ -123,6 +145,11 @@ class WorldAgent(Agent):
             if self.daily_charging_sessions > 0
             else 0.0
         )
+        peak_load_reduction = (
+            ((self.daily_baseline_peak_load - self.daily_peak_load) / self.daily_baseline_peak_load) * 100
+            if self.daily_baseline_peak_load > 0
+            else 0.0
+        )
         return {
             "energy_consumed": self.daily_energy_consumed,
             "charging_cost": self.daily_charging_cost,
@@ -130,6 +157,7 @@ class WorldAgent(Agent):
             "charging_sessions": self.daily_charging_sessions,
             "renewable_pct": renewable_pct,
             "peak_load": self.daily_peak_load,
+            "peak_load_reduction": peak_load_reduction,
         }
 
     def reset_daily_metrics(self) -> None:
@@ -140,6 +168,7 @@ class WorldAgent(Agent):
         self.daily_waiting_time = 0.0
         self.daily_waiting_events = 0
         self.daily_peak_load = 0.0
+        self.daily_baseline_peak_load = self.baseline_peak_load
 
     async def setup(self) -> None:
         print(f"[WorldAgent] {self.jid} starting…")

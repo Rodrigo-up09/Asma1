@@ -93,6 +93,20 @@ def _collect_cs_positions(cs_deployment) -> dict:
     return positions
 
 
+def _collect_cs_configs(cs_deployment) -> dict:
+    """Return CS configuration map: jid -> {num_doors, max_charging_rate} for baseline load calculation."""
+    configs = {}
+    for cs in cs_deployment:
+        if not cs.get("enabled", True):
+            continue
+        cfg = cs["config"]
+        configs[cs["jid"]] = {
+            "num_doors": float(cfg.get("num_doors", 0)),
+            "max_charging_rate": float(cfg.get("max_charging_rate", 0)),
+        }
+    return configs
+
+
 def _generate_scenario_cs_deployment(scenario) -> list[dict]:
     """Create CS deployment from scenario configuration."""
     deployment = []
@@ -224,12 +238,14 @@ async def main():
     # ── World Agent ──────────────────────────────────────────────────
     all_agent_jids = _collect_active_jids(cs_deployment, ev_deployment)
     cs_positions = _collect_cs_positions(cs_deployment)
+    cs_configs = _collect_cs_configs(cs_deployment)
     world_agent = WorldAgent(
         jid=WORLD_JID,
         password=WORLD_PASSWORD,
         agent_jids=all_agent_jids,
         world_clock=world_clock,
         cs_positions=cs_positions,
+        cs_configs=cs_configs,
         scenario_type=scenario_type,
     )
     await world_agent.start()
