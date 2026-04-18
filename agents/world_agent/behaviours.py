@@ -156,6 +156,9 @@ class StatsListenerBehaviour(CyclicBehaviour):
             if bool(data.get("reached_target_soc", False)):
                 agent.soc_success_departures += 1
                 agent.daily_soc_success_departures += 1
+
+
+class DailyMetricsLoggerBehaviour(PeriodicBehaviour):
     """Write one metrics snapshot per day into logs/<scenario>.txt."""
 
     def __init__(self, period: float = 1.0):
