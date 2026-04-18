@@ -107,6 +107,33 @@ def _collect_cs_configs(cs_deployment) -> dict:
     return configs
 
 
+def _add_staggered_arrival_times(ev_deployment: list[dict], start_hour: float = 7.0) -> tuple[list[dict], list[dict]]:
+    """Split EV deployment into immediately spawned and pending (future arrival) EVs.
+    
+    Returns:
+        (immediately_spawned, pending_arrivals)
+    """
+    immediately_spawned = []
+    pending_arrivals = []
+    
+    # Spread EV arrivals over the first 12 hours of simulation
+    total_evs = len(ev_deployment)
+    
+    for i, ev_data in enumerate(ev_deployment):
+        # Calculate arrival hour (staggered throughout first 12 hours)
+        arrival_hour = start_hour + (i * 12.0 / max(1, total_evs))
+        ev_data["arrival_hour"] = arrival_hour
+        
+        if i == 0 or arrival_hour < start_hour + 0.5:
+            # First EV and nearby arrivals spawn immediately
+            immediately_spawned.append(ev_data)
+        else:
+            # Future arrivals stored as pending
+            pending_arrivals.append(ev_data)
+    
+    return immediately_spawned, pending_arrivals
+
+
 def _generate_scenario_cs_deployment(scenario) -> list[dict]:
     """Create CS deployment from scenario configuration."""
     deployment = []
@@ -204,6 +231,10 @@ async def main():
         ev_deployment = _generate_scenario_ev_deployment(random_scenario, cs_stations)
         scenario_type = random_scenario.__class__.__name__
 
+    # ── Add staggered arrival times to EVs for dynamic spawning ──────
+    start_hour = world_clock.current_hour()
+    ev_immediate, ev_pending = _add_staggered_arrival_times(ev_deployment, start_hour=start_hour)
+
     active_cs_agents = []
     active_ev_agents = []
 
@@ -222,7 +253,7 @@ async def main():
         active_cs_agents.append(cs_agent)
 
     # ── EV agents ────────────────────────────────────────────────────
-    for ev_data in ev_deployment:
+    for ev_data in ev_immediate:
         if not ev_data.get("enabled", True):
             continue
         ev_agent = EVAgent(
@@ -248,6 +279,8 @@ async def main():
         cs_configs=cs_configs,
         scenario_type=scenario_type,
     )
+    # Pass pending EV deployments for dynamic spawning
+    world_agent.set_pending_ev_deployments(ev_pending)
     await world_agent.start()
 
     # ── Status printout ──────────────────────────────────────────────
@@ -289,6 +322,35 @@ async def main():
 
     while not viz._stop_event.is_set():
         try:
+            # ── Spawn pending EVs that have arrived ───────────────────
+            current_hour = world_clock.current_hour()
+            evs_to_spawn = [
+                ev for ev in world_agent.pending_ev_deployments
+                if ev.get("arrival_hour", current_hour + 1) <= current_hour
+            ]
+            
+            for ev_data in evs_to_spawn:
+                if ev_data not in active_ev_agents:  # Avoid double spawning
+                    ev_agent = EVAgent(
+                        ev_data["jid"],
+                        ev_data["password"],
+                        ev_config=ev_data["config"],
+                    )
+                    ev_agent.world_clock = world_clock
+                    await ev_agent.start()
+                    ev_agent.web.start(hostname="127.0.0.1", port=ev_data["web_port"])
+                    active_ev_agents.append(ev_agent)
+                    world_agent.register_active_ev(ev_data["jid"])
+                    viz._ev_agents = active_ev_agents  # Update visualizer
+                    
+                    # Remove from pending
+                    if ev_data in world_agent.pending_ev_deployments:
+                        world_agent.pending_ev_deployments.remove(ev_data)
+                    
+                    ev_jid = ev_data["jid"]
+                    t = world_clock.formatted_time()
+                    print(f"[{t}] ✈️ EV {ev_jid} arrived - starting simulation")
+            
             # Update CS station data with current load for informed EV selection
             updated_cs_stations = _build_active_cs_stations(cs_deployment, active_cs_agents)
             for ev_agent in active_ev_agents:

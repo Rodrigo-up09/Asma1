@@ -15,6 +15,7 @@ from .behaviours import (
         BroadcastBehaviour,
         DailyMetricsLoggerBehaviour,
         StatsListenerBehaviour,
+        EVSpawnerBehaviour,
 )
 from .metrics_logger import ScenarioMetricsLogWriter
 
@@ -86,6 +87,10 @@ class WorldAgent(Agent):
         # Scenario-aware metrics logger service.
         self.metrics_log_writer = ScenarioMetricsLogWriter(scenario_type=scenario_type)
 
+        # ── Dynamic EV arrival/departure management ──────────────────
+        self.pending_ev_deployments: List[Dict] = []  # EVs scheduled to arrive
+        self.active_ev_jids: set = set()  # Currently active EV JIDs
+
         # Daily metrics accumulators.
         self.daily_energy_consumed: float = 0.0
         self.daily_charging_cost: float = 0.0
@@ -113,6 +118,18 @@ class WorldAgent(Agent):
             except (TypeError, ValueError, KeyError):
                 pass
         return total_capacity
+
+    def set_pending_ev_deployments(self, deployments: List[Dict]) -> None:
+        """Store EV deployments scheduled for future arrival."""
+        self.pending_ev_deployments = deployments.copy() if deployments else []
+
+    def register_active_ev(self, ev_jid: str) -> None:
+        """Register an actively spawned EV."""
+        self.active_ev_jids.add(ev_jid)
+    
+    def unregister_active_ev(self, ev_jid: str) -> None:
+        """Unregister an EV that has departed."""
+        self.active_ev_jids.discard(ev_jid)
 
     @staticmethod
     def _compute_map_bounds(cs_positions: Dict[str, Dict[str, float]]) -> Tuple[float, float, float, float]:
@@ -198,3 +215,7 @@ class WorldAgent(Agent):
 
         # Behaviour 3 — persist one metrics snapshot at end of each day
         self.add_behaviour(DailyMetricsLoggerBehaviour(period=1.0))
+
+        # Behaviour 4 — spawn arriving EVs dynamically
+        if self.pending_ev_deployments:
+            self.add_behaviour(EVSpawnerBehaviour(period=1.0))

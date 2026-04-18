@@ -183,3 +183,31 @@ class DailyMetricsLoggerBehaviour(PeriodicBehaviour):
             agent.reset_daily_metrics()
 
         self._last_hour = current_hour
+
+
+class EVSpawnerBehaviour(PeriodicBehaviour):
+    """Monitor pending EV arrivals and request spawning when arrival time is reached."""
+
+    def __init__(self, period: float = 1.0):
+        super().__init__(period=period)
+        self._spawned_indices = set()  # Track which pending EVs have been spawned
+
+    async def run(self) -> None:
+        agent = self.agent
+        current_hour = agent.world_clock.current_hour()
+
+        # Check pending EV deployments for arrivals
+        for idx, ev_data in enumerate(agent.pending_ev_deployments):
+            if idx in self._spawned_indices:
+                continue  # Already spawned
+            
+            arrival_hour = ev_data.get("arrival_hour", current_hour)
+            
+            if current_hour >= arrival_hour:
+                # Time to spawn this EV
+                ev_jid = ev_data.get("jid", "unknown")
+                t = agent.world_clock.formatted_time()
+                print(f"[{t}][WorldAgent] EV arrival: {ev_jid} arrived at sim-time")
+                
+                # Mark as spawned (main loop will handle actual spawning)
+                self._spawned_indices.add(idx)
