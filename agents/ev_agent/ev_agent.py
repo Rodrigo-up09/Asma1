@@ -8,6 +8,7 @@ from spade.template import Template
 
 from .messaging import EVMessagingService
 from .schedule_manager import ScheduleManager
+from .time_constraints import TimeConstraintManager, Priority
 from .states import (
     ChargingState,
     DrivingState,
@@ -110,6 +111,22 @@ class EVAgent(Agent):
             # Initialize static schedule from generator if it's the first day
             if not self.schedule:
                 self.schedule = self.schedule_manager.generate_initial_schedule()
+        
+        # Time constraint manager for deadline checking and energy-time trade-offs
+        self.time_constraint_manager = TimeConstraintManager(home_x=self.x, home_y=self.y)
+        
+        # Enhance schedule with time constraints if not already present
+        enable_time_constraints = config.get("enable_time_constraints", True)
+        if enable_time_constraints:
+            constraint_window_width = config.get("time_constraint_window_width", 1.0)
+            default_priority_name = config.get("default_priority", "MEDIUM")
+            default_priority = Priority[default_priority_name]
+            self.schedule = self.time_constraint_manager.enhance_schedule_with_constraints(
+                self.schedule,
+                default_window_width=constraint_window_width,
+                default_priority=default_priority,
+            )
+        
         self.current_destination = None  # The destination we're currently heading to
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
@@ -117,6 +134,11 @@ class EVAgent(Agent):
         # Session tracking (used by states for metric reporting)
         self._session_kwh: float = 0.0
         self._queue_entry_time: float = 0.0
+        
+        # Time constraint tracking
+        self._deadline_misses: int = 0
+        self._deadline_meets: int = 0
+        self._total_time_penalty: float = 0.0
 
         self.messaging_service = EVMessagingService()
         self.world_clock = None
@@ -178,6 +200,64 @@ class EVAgent(Agent):
         if self.schedule_manager:
             return self.schedule_manager.get_schedule_for_day(self._day_offset)
         return self.schedule if self.schedule else None
+    
+    def can_make_deadline(self, destination, current_time: float) -> tuple[bool, str]:
+        """Check if EV can reach destination before hard deadline.
+        
+        Args:
+            destination: Target destination entry
+            current_time: Current simulation time
+        
+        Returns:
+            (can_make_deadline, reason_string)
+        """
+        import math
+        distance = math.hypot(destination["x"] - self.x, destination["y"] - self.y)
+        can_make, projected_arrival, reason = self.time_constraint_manager.will_make_deadline(
+            current_time=current_time,
+            distance_to_destination=distance,
+            velocity=self.velocity,
+            destination=destination,
+        )
+        return can_make, reason
+    
+    def analyze_energy_time_tradeoff(self, destination, current_time: float) -> dict:
+        """Analyze energy vs time trade-off for reaching a destination.
+        
+        Args:
+            destination: Target destination entry
+            current_time: Current simulation time
+        
+        Returns:
+            Dict with scenario analysis and recommendations
+        """
+        import math
+        distance = math.hypot(destination["x"] - self.x, destination["y"] - self.y)
+        
+        analysis = self.time_constraint_manager.calculate_energy_time_tradeoff(
+            current_time=current_time,
+            current_soc=self.current_soc,
+            distance_to_destination=distance,
+            battery_capacity=self.battery_capacity_kwh,
+            energy_per_km=self.energy_per_km,
+            base_velocity=self.velocity,
+            destination=destination,
+        )
+        return analysis
+    
+    def get_recommended_speed_multiplier(self, destination, current_time: float) -> tuple[float, str]:
+        """Get recommended speed multiplier based on time constraints.
+        
+        Args:
+            destination: Target destination entry
+            current_time: Current simulation time
+        
+        Returns:
+            (speed_multiplier, reason_string)
+        """
+        analysis = self.analyze_energy_time_tradeoff(destination, current_time)
+        multiplier, reason = self.time_constraint_manager.recommend_speed(analysis, prefer_on_time=True)
+        return multiplier, reason
 
     def _closest_cs(self):
         return closest_station(self.x, self.y, self.cs_stations)

@@ -83,8 +83,41 @@ class DrivingState(State):
                 self.set_next_state(STATE_DRIVING)
                 return
             else:
-                # Arrived at destination → park and wait for next scheduled departure
+                # Arrived at destination → check time constraints and park
                 agent.current_destination = None  # Clear the destination
+                
+                # Check time constraints and apply penalties
+                if hasattr(agent, 'time_constraint_manager') and hasattr(agent, 'world_clock'):
+                    try:
+                        current_time = agent.world_clock.sim_hours
+                        time_window = agent.time_constraint_manager.get_time_window(target)
+                        arrival_status = time_window.get_arrival_status(current_time)
+                        penalty_score, penalty_reason = time_window.calculate_time_penalty(current_time)
+                        
+                        # Track metrics
+                        agent._total_time_penalty += penalty_score
+                        if arrival_status.value in ["late_soft", "late_hard"]:
+                            agent._deadline_misses += 1
+                        else:
+                            agent._deadline_meets += 1
+                        
+                        # Log arrival status
+                        print(
+                            f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
+                            f"Status: {arrival_status.value} | {penalty_reason} | "
+                            f"pos=({agent.x:.1f}, {agent.y:.1f})"
+                        )
+                    except Exception as e:
+                        print(
+                            f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
+                            f"pos=({agent.x:.1f}, {agent.y:.1f}) [time constraint check failed: {e}]"
+                        )
+                else:
+                    print(
+                        f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
+                        f"pos=({agent.x:.1f}, {agent.y:.1f})"
+                    )
+                
                 # Advance schedule index to the next stop
                 if agent.schedule:
                     old_index = agent.current_target_index
@@ -92,10 +125,7 @@ class DrivingState(State):
                     # If we wrapped to the first stop, a new day has started
                     if agent.current_target_index == 0:
                         agent._day_offset += 1
-                print(
-                    f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
-                    f"pos=({agent.x:.1f}, {agent.y:.1f})"
-                )
+                
                 self.set_next_state(STATE_STOPPED)
                 return
         else:
