@@ -148,6 +148,7 @@ def _generate_scenario_ev_deployment(scenario, cs_stations) -> list[dict]:
                     "grid_load": 0.5,
                     "renewable_available": False,
                     "schedule": config.get("schedule", []),
+                    "available_spots": scenario.spots,  # Enable dynamic schedule regeneration
                     "world_jid": WORLD_JID,
                 },
             }

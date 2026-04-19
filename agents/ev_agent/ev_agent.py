@@ -7,6 +7,7 @@ from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from .messaging import EVMessagingService
+from .schedule_manager import ScheduleManager
 from .states import (
     ChargingState,
     DrivingState,
@@ -88,12 +89,27 @@ class EVAgent(Agent):
         self.renewable_available = config.get("renewable_available", False)
 
         # Schedule: list of {"name": str, "x": float, "y": float, "hour": float}
+        base_schedule = config.get("schedule", [])
         self.schedule = sorted(
-            config.get("schedule", []),
+            base_schedule,
             key=lambda s: s["hour"],
         )
         self.current_target_index = 0
         self._day_offset = 0  # whole days elapsed since start (for recurring schedule)
+        
+        # Dynamic schedule manager (optional) — if available_spots provided, enable dynamic regen
+        available_spots = config.get("available_spots", [])
+        self.schedule_manager: Optional[ScheduleManager] = None
+        if available_spots:
+            self.schedule_manager = ScheduleManager(
+                home_x=self.x,
+                home_y=self.y,
+                available_spots=available_spots,
+                num_stops=config.get("num_schedule_stops", 4),
+            )
+            # Initialize static schedule from generator if it's the first day
+            if not self.schedule:
+                self.schedule = self.schedule_manager.generate_initial_schedule()
         self.current_destination = None  # The destination we're currently heading to
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = config.get("world_jid", "")
@@ -116,11 +132,21 @@ class EVAgent(Agent):
     def next_target(self):
         """Return the next scheduled destination (current_target_index) with absolute hour.
         
-        The schedule repeats daily. The returned stop's hour is adjusted by the
-        current day offset to give an absolute simulation time.
+        If dynamic scheduling is enabled via schedule_manager, the midpoint destinations
+        change daily. The schedule repeats daily; the returned stop's hour is adjusted by
+        the current day offset to give an absolute simulation time.
         """
         if not self.schedule:
             return None
+        
+        # If dynamic scheduling is enabled, get the day-specific schedule
+        if self.schedule_manager:
+            current_day_schedule = self.schedule_manager.get_schedule_for_day(self._day_offset)
+            if current_day_schedule and self.current_target_index < len(current_day_schedule):
+                return current_day_schedule[self.current_target_index].copy()
+            return None
+        
+        # Static schedule fallback (no dynamic generator)
         stop = self.schedule[self.current_target_index]
         result = stop.copy()
         # Apply day offset to get absolute hour
@@ -139,6 +165,19 @@ class EVAgent(Agent):
         except ValueError:
             return None
         return self.schedule[(idx + 1) % len(self.schedule)]
+
+    def get_current_day_schedule(self):
+        """Get the full schedule for the current day.
+        
+        If dynamic scheduling is enabled, returns the day-specific schedule
+        with randomly selected midpoints. Otherwise returns the static schedule.
+        
+        Returns:
+            List of schedule entries for today or None.
+        """
+        if self.schedule_manager:
+            return self.schedule_manager.get_schedule_for_day(self._day_offset)
+        return self.schedule if self.schedule else None
 
     def _closest_cs(self):
         return closest_station(self.x, self.y, self.cs_stations)

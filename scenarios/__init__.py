@@ -7,6 +7,7 @@ from .base import Scenario
 from .price_comparison import PriceComparison
 from .cs_availability import CSAvailability
 from .random_scenario import RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
+from .dynamic_scheduling import DynamicScheduling
 from .utils import generate_scenario_schedule, generate_hourly_schedule
 
 # Registry of all available scenarios
@@ -14,6 +15,7 @@ SCENARIOS = [
     PriceComparison(),
     CSAvailability(),
     RandomScenario(),
+    DynamicScheduling(),
 ]
 
 
@@ -59,6 +61,7 @@ __all__ = [
     "PriceComparison",
     "CSAvailability",
     "RandomScenario",
+    "DynamicScheduling",
     "SCENARIOS",
     "get_scenario_by_index",
     "display_menu",
