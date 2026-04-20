@@ -233,8 +233,12 @@ class StoppedState(State):
                 f"Need {min_soc_needed:.0%} but can only reach {max_soc_can_reach:.0%}"
             )
             return min_soc_needed
-        
-        return max_soc_can_reach
+
+        # For deadline-sensitive trips, avoid overcharging. Charge only what is
+        # needed for this leg (+small safety margin), capped by configured target.
+        safety_margin_soc = 0.03
+        desired_soc = min(1.0, min_soc_needed + safety_margin_soc)
+        return min(desired_soc, self.agent.target_soc, max_soc_can_reach)
 
     def _log_charging_detour(self, t: str, name: str, detour_total_hours: float,
                              energy_to_reach_cs: float, energy_cs_to_dest: float,
@@ -258,8 +262,8 @@ class StoppedState(State):
             f"  Total detour time: {detour_total_hours:.2f} hours"
         )
 
-    async def _make_departure_decision(self, next_stop: dict, needs_charge_detour: bool, 
-                                       travel_hours: float,
+    async def _make_departure_decision(self, next_stop: dict, needs_charge_detour: bool,
+                                       total_hours_needed: float,
                                        time_until_arrival: float, t: str, name: str):
         """Decide whether to depart now and which route to take.
         
@@ -268,14 +272,15 @@ class StoppedState(State):
         next_state : str or None
             STATE_DRIVING, STATE_GOING_TO_CHARGER, or None to remain STOPPED.
         """
-        leave_threshold = travel_hours + 1.0
+        extra_buffer = 1.0 if needs_charge_detour else 0.0
+        leave_threshold = total_hours_needed + extra_buffer
         
         print(
             f"[{t}][{name}][STOPPED] Departure calculation:\n"
             f"  Time until arrival: {time_until_arrival:.2f} hours\n"
-            f"  Total travel time needed: {travel_hours:.2f} hours\n"
+            f"  Total travel time needed: {total_hours_needed:.2f} hours\n"
             f"  Needs charge detour: {needs_charge_detour}\n"
-            f"  One-hour-early leave threshold: {leave_threshold:.2f} hours\n"
+            f"  Departure threshold: {leave_threshold:.2f} hours (includes {extra_buffer:.1f}h buffer)\n"
             f"  Should leave: {time_until_arrival <= leave_threshold}"
         )
         
@@ -291,7 +296,7 @@ class StoppedState(State):
             else:
                 print(
                     f"[{t}][{name}][STOPPED] Time to leave for \"{next_stop['name']}\" "
-                    f"(travel time ≈ {travel_hours:.1f}h)"
+                    f"(travel time ≈ {total_hours_needed:.1f}h)"
                 )
                 self.agent.current_destination = next_stop
                 return STATE_DRIVING
@@ -342,10 +347,30 @@ class StoppedState(State):
             
             # Check if charging detour is needed using distance only.
             needs_charge_detour = self._needs_charge_detour(dist, tick_sim_hours)
+
+            # Use the full detour time when charging is needed (home→CS+charge+CS→dest).
+            # This keeps departure timing aligned with deadlines.
+            total_hours_needed = travel_hours
+            if needs_charge_detour:
+                _, detour_total_hours = await self._handle_charging_detour(
+                    next_stop,
+                    dist,
+                    travel_hours,
+                    tick_sim_hours,
+                    time_until_arrival,
+                    t,
+                    name,
+                )
+                if detour_total_hours > 0:
+                    total_hours_needed = detour_total_hours
+            else:
+                # Clear any stale per-trip target when direct travel is sufficient.
+                if hasattr(agent, "_trip_target_soc"):
+                    delattr(agent, "_trip_target_soc")
             
             # Make departure decision
             next_state = await self._make_departure_decision(
-                next_stop, needs_charge_detour, travel_hours,
+                next_stop, needs_charge_detour, total_hours_needed,
                 time_until_arrival, t, name
             )
             if next_state is not None:

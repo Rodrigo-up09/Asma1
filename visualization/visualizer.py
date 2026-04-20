@@ -101,16 +101,17 @@ class WorldVisualizer:
             self.world_renderer.draw_legend(screen, font)
             self.world_renderer.draw_title(screen, font)
 
-            # Draw building markers (one per unique location)
+            # Draw schedule markers with ownership labels (one per unique owner+location)
             buildings_seen = set()
             bld_colour = (180, 180, 220)
             for ev in self.ev_agents:
                 if hasattr(ev, "schedule") and ev.schedule:
+                    ev_name = str(ev.jid).split("@")[0]
                     for stop in ev.schedule:
-                        key = (stop["name"], stop["x"], stop["y"])
+                        key = (ev_name, stop["name"], stop["x"], stop["y"])
                         if key not in buildings_seen:
                             buildings_seen.add(key)
-                            name, wx, wy = key
+                            owner, name, wx, wy = key
                             tx, ty = self.world_to_screen(wx, wy)
                             diamond = [
                                 (tx, ty - 7),
@@ -120,7 +121,7 @@ class WorldVisualizer:
                             ]
                             pygame.draw.polygon(screen, bld_colour, diamond)
                             pygame.draw.polygon(screen, (255, 255, 255), diamond, 1)
-                            label = font.render(name, True, bld_colour)
+                            label = font.render(f"{owner}: {name}", True, bld_colour)
                             screen.blit(label, (tx + 8, ty - 7))
 
             # World clock display

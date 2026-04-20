@@ -177,7 +177,10 @@ async def main():
         print(f"\n📋 Loaded scenario: {selected_scenario.name}")
         print(f"   {selected_scenario.description}\n")
         
-        world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
+        world_clock = WorldClock(
+            real_seconds_per_hour=1.0,
+            start_hour=getattr(selected_scenario, "start_hour", 7.0),
+        )
         cs_deployment = _generate_scenario_cs_deployment(selected_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(selected_scenario, cs_stations)

@@ -9,6 +9,7 @@ class Scenario:
     def __init__(self, name, description):
         self.name = name
         self.description = description
+        self.start_hour = 7.0
         self.num_evs = 1
         self.num_css = 1
         self.night_driver_ratio = 0.0
