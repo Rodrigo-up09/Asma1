@@ -1,4 +1,5 @@
 import json
+import random
 import time
 
 from typing import Optional
@@ -83,6 +84,7 @@ class EVAgent(Agent):
 
         self.cs_stations = config.get("cs_stations", [])
         self.current_cs_jid = None
+        self.cs_selection_mode = config.get("cs_selection_mode", "score")
 
         self.electricity_price = config.get("electricity_price", 0.15)
         self.grid_load = config.get("grid_load", 0.5)
@@ -191,12 +193,33 @@ class EVAgent(Agent):
     async def select_and_commit_cs(self, state) -> str | None:
         """Broadcast CS info request, pick the best CS, and send a commitment.
         Returns the chosen CS JID on success, or None if none available."""
-        station_infos = await self.collect_station_infos(state)
-        if not station_infos:
+        if not self.cs_stations:
             return None
 
         name = str(self.jid).split("@")[0]
         t = self.world_clock.formatted_time() if self.world_clock else "??:??"
+
+        if self.cs_selection_mode == "random":
+            station_infos = [self._default_station_info(st) for st in self.cs_stations]
+            random.shuffle(station_infos)
+
+            for info in station_infos:
+                accepted = await self.commit_to_station(state, info)
+                jid = info["jid"]
+                if accepted:
+                    print(f"[{t}][{name}][SELECT] Committed randomly to {jid}")
+                    self.current_cs_jid = jid
+                    return jid
+                print(f"[{t}][{name}][SELECT] Random commit rejected by {jid}, trying next...")
+
+            best_jid = station_infos[0]["jid"]
+            print(f"[{t}][{name}][SELECT] Random mode fallback to {best_jid}.")
+            self.current_cs_jid = best_jid
+            return best_jid
+
+        station_infos = await self.collect_station_infos(state)
+        if not station_infos:
+            return None
 
         from .utils import score_charging_station
 

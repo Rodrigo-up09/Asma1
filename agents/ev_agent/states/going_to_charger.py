@@ -132,6 +132,8 @@ class GoingToChargerState(State):
             next_state: STATE_CHARGING or STATE_WAITING_QUEUE, or STATE_GOING_TO_CHARGER if error
         """
         name = str(agent.jid).split("@")[0]
+        clock = getattr(agent, "world_clock", None)
+        sim_hours_now = getattr(clock, "sim_hours", 0.0)
 
         status = response_data.get("status")
         if status == "cs_update":
@@ -160,7 +162,7 @@ class GoingToChargerState(State):
         if status == "accept":
             print(f"[{t}][{name}][GOING_TO_CHARGER] Entering charge session.")
             # Mark queue-entry time = now
-            agent._queue_entry_time = asyncio.get_event_loop().time()
+            agent._queue_entry_time = sim_hours_now
             agent._session_kwh = 0.0
             return STATE_CHARGING
 
@@ -169,7 +171,7 @@ class GoingToChargerState(State):
                 f"[{t}][{name}][GOING_TO_CHARGER] Waiting in queue. "
                 f"Estimated wait time: {waiting_time} minutes."
             )
-            agent._queue_entry_time = asyncio.get_event_loop().time()
+            agent._queue_entry_time = sim_hours_now
             agent._session_kwh = 0.0
             return STATE_WAITING_QUEUE
 

@@ -112,10 +112,15 @@ class WaitingQueueState(State):
             print(f"[{t}][{name}][WAITING_QUEUE] Slot available. Starting charge.")
 
             # ── metric: waiting time ──
+            clock = getattr(agent, "world_clock", None)
             entry_time = getattr(
-                agent, "_queue_entry_time", asyncio.get_event_loop().time()
+                agent, "_queue_entry_time", getattr(clock, "sim_hours", 0.0)
             )
-            waited_mins = (asyncio.get_event_loop().time() - entry_time) / 60.0
+            current_time = getattr(clock, "sim_hours", entry_time)
+            waited_hours = current_time - entry_time
+            if waited_hours < 0:
+                waited_hours += 24.0
+            waited_mins = waited_hours * 60.0
             await send_stat(
                 self,
                 getattr(agent, "world_jid", None),

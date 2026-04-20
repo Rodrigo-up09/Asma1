@@ -32,10 +32,15 @@ async def _send_stat(state, world_jid: str, payload: dict) -> None:
 
 
 async def _report_load(state) -> None:
-    """Send current load kW to the WorldAgent after any door change."""
+    """Send current registered EV count to the WorldAgent after any door change."""
     agent = state.agent
     world_jid = getattr(agent, "world_jid", None)
-    current_load = (agent.used_doors + (0.5 * len(agent.expected_evs))) * agent.max_charging_rate
+    queued_evs = {
+        item.get("ev_jid")
+        for item in agent.request_queue.snapshot()
+        if item.get("ev_jid")
+    }
+    current_load = len(set(agent.active_charging.keys()) | queued_evs | set(agent.expected_evs))
     await _send_stat(
         state,
         world_jid,

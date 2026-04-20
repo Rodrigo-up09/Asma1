@@ -21,10 +21,11 @@ class ScenarioMetricsLogWriter:
             f"Day {day_number} (closed at sim-time {sim_time})",
             f"  Total Energy Consumed : {metrics['energy_consumed']:.2f} kWh",
             f"  Total Charging Cost   : {metrics['charging_cost']:.2f} EUR",
-            f"  Avg Waiting Time      : {metrics['avg_waiting_time']:.2f} min",
+            f"  Avg Waiting Time      : {metrics['avg_waiting_time']:.2f} sim-min",
             f"  Charging Sessions     : {metrics['charging_sessions']}",
+            f"  Missed Spots          : {metrics['missed_spots']} late arrivals",
             f"  Renewable Utilization : {metrics['renewable_pct']:.1f}%",
-            f"  Peak Load             : {metrics['peak_load']:.2f} kW",
+            f"  Peak Load             : {metrics['peak_load']} EVs",
             "",
         ]
         with self.log_file_path.open("a", encoding="utf-8") as f:

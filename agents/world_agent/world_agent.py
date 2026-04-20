@@ -71,6 +71,7 @@ class WorldAgent(Agent):
 
         self.total_waiting_time: float = 0.0
         self.waiting_time_events: int = 0
+        self.total_missed_spots: int = 0
 
         self.current_load: float = 0.0
         self.peak_load: float = 0.0
@@ -85,6 +86,7 @@ class WorldAgent(Agent):
         self.daily_renewable_sessions: int = 0
         self.daily_waiting_time: float = 0.0
         self.daily_waiting_events: int = 0
+        self.daily_missed_spots: int = 0
         self.daily_peak_load: float = 0.0
 
     @staticmethod
@@ -128,6 +130,7 @@ class WorldAgent(Agent):
             "charging_cost": self.daily_charging_cost,
             "avg_waiting_time": avg_wait,
             "charging_sessions": self.daily_charging_sessions,
+            "missed_spots": self.daily_missed_spots,
             "renewable_pct": renewable_pct,
             "peak_load": self.daily_peak_load,
         }
@@ -139,6 +142,7 @@ class WorldAgent(Agent):
         self.daily_renewable_sessions = 0
         self.daily_waiting_time = 0.0
         self.daily_waiting_events = 0
+        self.daily_missed_spots = 0
         self.daily_peak_load = 0.0
 
     async def setup(self) -> None:

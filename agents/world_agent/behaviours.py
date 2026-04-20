@@ -142,6 +142,10 @@ class StatsListenerBehaviour(CyclicBehaviour):
             agent.daily_waiting_time += minutes
             agent.daily_waiting_events += 1
 
+        elif event == "missed_spot":
+            agent.total_missed_spots += 1
+            agent.daily_missed_spots += 1
+
         elif event == "load_update":
             current_load = float(data.get("current_load", 0.0))
             agent.current_load = current_load

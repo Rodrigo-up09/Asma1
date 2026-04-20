@@ -1,4 +1,5 @@
 import asyncio
+import random
 
 import spade
 from agents.cs_agent import CSAgent
@@ -13,7 +14,7 @@ from scenarios import display_menu, RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TAR
 #  ✏️  CHANGE THESE TWO NUMBERS TO SCALE THE SIMULATION
 # ══════════════════════════════════════════════════════════════════════
 
-NUM_EVS = 20  # how many Electric Vehicle agents to spawn
+NUM_EVS = 15  # how many Electric Vehicle agents to spawn
 NUM_CSS = 3  # how many Charging Station agents to spawn
 
 NIGHT_DRIVER_RATIO = 0.4  # fraction of EVs that are night drivers (0.0–1.0)
@@ -144,6 +145,7 @@ def _generate_scenario_ev_deployment(scenario, cs_stations) -> list[dict]:
                     "x": config["x"],
                     "y": config["y"],
                     "cs_stations": cs_stations,
+                    "cs_selection_mode": getattr(scenario, "cs_selection_mode", "score"),
                     "electricity_price": 0.15,
                     "grid_load": 0.5,
                     "renewable_available": False,
@@ -153,6 +155,73 @@ def _generate_scenario_ev_deployment(scenario, cs_stations) -> list[dict]:
             }
         )
     return deployment
+
+
+CS_EVAL_MODES = {
+    "distance_focus": {
+        "label": "Distância focada",
+        "description": "Só a distância pesa na avaliação da CS.",
+        "weights": {"distance": 1.0, "price": 0.0, "load": 0.0},
+    },
+    "price_focus": {
+        "label": "Preço focado",
+        "description": "Só o preço pesa na avaliação da CS.",
+        "weights": {"distance": 0.0, "price": 1.0, "load": 0.0},
+    },
+    "load_focus": {
+        "label": "Carga focada",
+        "description": "Só a carga pesa na avaliação da CS.",
+        "weights": {"distance": 0.0, "price": 0.0, "load": 1.0},
+    },
+    "distance_price_balance": {
+        "label": "Distância + preço",
+        "description": "Distância e preço pesam; carga é ignorada.",
+        "weights": {"distance": 1.0, "price": 1.0, "load": 0.0},
+    },
+    "distance_load_balance": {
+        "label": "Distância + carga",
+        "description": "Distância e carga pesam; preço é ignorado.",
+        "weights": {"distance": 1.0, "price": 0.0, "load": 1.0},
+    },
+    "price_load_balance": {
+        "label": "Preço + carga",
+        "description": "Preço e carga pesam; distância é ignorada.",
+        "weights": {"distance": 0.0, "price": 1.0, "load": 1.0},
+    },
+    "balanced": {
+        "label": "Balanceado",
+        "description": "Distância, preço e carga têm o mesmo peso.",
+        "weights": {"distance": 1.0, "price": 1.0, "load": 1.0},
+    },
+    "random": {
+        "label": "Aleatório",
+        "description": "Escolhe um dos modos acima ao acaso.",
+        "weights": None,
+    },
+}
+
+
+def _choose_random_cs_eval_mode() -> str:
+    options = list(CS_EVAL_MODES.items())
+    print("\nEscolhe o modo de avaliação da CS:")
+    for index, (key, option) in enumerate(options, 1):
+        print(f"  [{index}] {option['label']} - {option['description']}")
+
+    while True:
+        try:
+            choice = input(f"Selecione um modo (1-{len(options)}): ").strip()
+            choice_int = int(choice)
+            if 1 <= choice_int <= len(options):
+                return options[choice_int - 1][0]
+            print(f"Escolha inválida. Introduza um número entre 1 e {len(options)}.")
+        except ValueError:
+            print("Entrada inválida. Introduza um número.")
+
+
+def _apply_cs_eval_mode(mode_key: str) -> tuple[str, dict[str, float]]:
+    mode = CS_EVAL_MODES.get(mode_key, CS_EVAL_MODES["balanced"])
+    weights = mode["weights"]
+    return mode_key, weights
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -172,9 +241,19 @@ async def main():
         if selected_scenario.__class__.__name__ == "PriceComparison":
             # Emphasize price in scenario 1 so lowest-price CS is more evident.
             set_cs_selection_weights(distance=0.2, price=1.8, load=0.4)
+        elif selected_scenario.__class__.__name__ == "RandomScenario":
+            chosen_mode = _choose_random_cs_eval_mode()
+            resolved_mode, weights = _apply_cs_eval_mode(chosen_mode)
+            selected_scenario.cs_eval_mode = resolved_mode
+            selected_scenario.cs_selection_mode = "random" if resolved_mode == "random" else "score"
+            if weights is not None:
+                set_cs_selection_weights(**weights)
 
         # ── Use preset scenario ──────────────────────────────────────
         print(f"\n📋 Loaded scenario: {selected_scenario.name}")
+        if selected_scenario.__class__.__name__ == "RandomScenario":
+            mode_label = CS_EVAL_MODES[getattr(selected_scenario, "cs_eval_mode", "balanced")]["label"]
+            print(f"   CS evaluation mode: {mode_label}")
         print(f"   {selected_scenario.description}\n")
         
         world_clock = WorldClock(
@@ -184,19 +263,27 @@ async def main():
         cs_deployment = _generate_scenario_cs_deployment(selected_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(selected_scenario, cs_stations)
-        scenario_type = selected_scenario.__class__.__name__
+        if selected_scenario.__class__.__name__ == "RandomScenario":
+            scenario_type = f"{selected_scenario.__class__.__name__}_{getattr(selected_scenario, 'cs_eval_mode', 'balanced')}"
+        else:
+            scenario_type = getattr(selected_scenario, "log_name", selected_scenario.__class__.__name__)
     else:
         # ── Use default random simulation (with main.py parameters) ──
         print(f"\n🎲 Using default random simulation\n")
         
         # Create RandomScenario with parameters from main.py
-        random_scenario = RandomScenario(num_evs=NUM_EVS, num_css=NUM_CSS, night_driver_ratio=NIGHT_DRIVER_RATIO)
+        random_scenario = RandomScenario(
+            num_evs=NUM_EVS,
+            num_css=NUM_CSS,
+            night_driver_ratio=NIGHT_DRIVER_RATIO,
+            ev_profile_mode="random",
+        )
         
         world_clock = WorldClock(real_seconds_per_hour=1.0, start_hour=7.0)
         cs_deployment = _generate_scenario_cs_deployment(random_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(random_scenario, cs_stations)
-        scenario_type = random_scenario.__class__.__name__
+        scenario_type = getattr(random_scenario, "log_name", random_scenario.__class__.__name__)
 
     active_cs_agents = []
     active_ev_agents = []

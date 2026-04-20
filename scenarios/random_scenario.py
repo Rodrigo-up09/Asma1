@@ -13,10 +13,10 @@ from .base import Scenario
 #  Configuration (same as main.py)
 # ══════════════════════════════════════════════════════════════════════
 
-MAP_MIN, MAP_MAX = -30.0, 30.0
+MAP_MIN, MAP_MAX = -20.0, 20.0
 
-# --- CS ranges ---
-CS_NUM_DOORS_RANGE = (1, 4)                  # int
+# --- CS layout ---
+CS_DOORS_LAYOUT = (2, 1, 1)                 # one 2-port CS and two 1-port CSs
 CS_MAX_CHARGING_RATE_RANGE = (7.0, 50.0)     # kW per door
 CS_MAX_SOLAR_CAPACITY_RANGE = (50.0, 200.0)  # kWh storage
 CS_SOLAR_FILL_RANGE = (0.3, 0.8)             # fraction filled at start
@@ -24,16 +24,16 @@ CS_ENERGY_PRICE_RANGE = (0.10, 0.30)         # €/kWh
 CS_SOLAR_PRODUCTION_RANGE = (5.0, 25.0)      # kW
 
 # --- EV ranges ---
-EV_BATTERY_CAPACITY_RANGE = (30.0, 80.0)     # kWh
-EV_INITIAL_SOC_RANGE = (0.40, 1.0)           # fraction
+EV_BATTERY_CAPACITY_RANGE = (25.0, 70.0)     # kWh
+EV_INITIAL_SOC_RANGE = (0.35, 0.90)           # fraction
 EV_LOW_SOC_THRESHOLD = 0.20                  # fixed
 EV_TARGET_SOC = 0.80                         # fixed
 EV_MAX_CHARGE_RATE_RANGE = (7.0, 22.0)       # kW
 EV_VELOCITY_RANGE = (2.0, 5.0)              # units per tick
-EV_ENERGY_PER_KM_RANGE = (1, 4)             # kWh/km  (int)
+EV_ENERGY_PER_KM_RANGE = (2, 5)             # kWh/km  (int)
 
 DAY_BUILDINGS = [
-    {"name": "Office A",      "x":  15.0, "y":  20.0},
+    {"name": "Office A",      "x":  15.0, "y":  18.0},
     {"name": "Office B",      "x": -15.0, "y":  15.0},
     {"name": "School",        "x":   5.0, "y":  18.0},
     {"name": "Gym",           "x":   8.0, "y":  -3.0},
@@ -41,17 +41,17 @@ DAY_BUILDINGS = [
     {"name": "Supermarket",   "x":  12.0, "y":  -8.0},
     {"name": "Library",       "x":  -8.0, "y":  10.0},
     {"name": "Park",          "x":   0.0, "y":  12.0},
-    {"name": "Hospital",      "x": -20.0, "y":   5.0},
+    {"name": "Hospital",      "x": -18.0, "y":   5.0},
     {"name": "Café",          "x":   3.0, "y":   5.0},
 ]
 
 NIGHT_BUILDINGS = [
-    {"name": "Night Shift",   "x":  15.0, "y":  20.0},
+    {"name": "Night Shift",   "x":  15.0, "y":  18.0},
     {"name": "Warehouse",     "x": -18.0, "y": -12.0},
     {"name": "Bar",           "x":   3.0, "y":   2.0},
-    {"name": "Airport",       "x":  22.0, "y":  22.0},
-    {"name": "Hospital",      "x": -20.0, "y":   5.0},
-    {"name": "Factory",       "x": -10.0, "y": -20.0},
+    {"name": "Airport",       "x":  18.0, "y":  18.0},
+    {"name": "Hospital",      "x": -18.0, "y":   5.0},
+    {"name": "Factory",       "x": -10.0, "y": -18.0},
     {"name": "Gas Station",   "x":  10.0, "y":  -5.0},
     {"name": "Club",          "x":   0.0, "y":   8.0},
 ]
@@ -122,14 +122,14 @@ class RandomScenario(Scenario):
     
     def __init__(
         self,
-        num_evs: int = 10,
-        num_css: int = 5,
+        num_evs: int = 15,
+        num_css: int = 3,
         night_driver_ratio: float = 0.3,
     ):
         """Initialize random scenario."""
         super().__init__(
             name="Random Scenario",
-            description=f"Random simulation: {num_evs} EVs, {num_css} CS, {night_driver_ratio:.0%} night drivers.",
+            description=f"Random simulation: {num_evs} EVs, {num_css} CS, {sum(CS_DOORS_LAYOUT[:num_css])} ports, {night_driver_ratio:.0%} night drivers.",
         )
         
         self.num_evs = num_evs
@@ -142,12 +142,13 @@ class RandomScenario(Scenario):
         for i in range(1, self.num_css + 1):
             x, y = _rand_pos()
             max_solar = _rand(*CS_MAX_SOLAR_CAPACITY_RANGE)
+            num_doors = CS_DOORS_LAYOUT[(i - 1) % len(CS_DOORS_LAYOUT)]
             
             self.cs_configs.append({
                 "jid": f"cs{i}@localhost",
                 "password": "password",
                 "config": CSConfig(
-                    num_doors=random.randint(*CS_NUM_DOORS_RANGE),
+                    num_doors=num_doors,
                     max_charging_rate=_rand(*CS_MAX_CHARGING_RATE_RANGE),
                     max_solar_capacity=max_solar,
                     actual_solar_capacity=round(

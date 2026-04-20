@@ -92,6 +92,19 @@ class DrivingState(State):
                     # If we wrapped to the first stop, a new day has started
                     if agent.current_target_index == 0:
                         agent._day_offset += 1
+
+                target_hour = target.get("hour")
+                if target_hour is not None:
+                    current_hour = clock.sim_hours
+                    if current_hour > target_hour:
+                        await send_stat(
+                            self,
+                            getattr(agent, "world_jid", None),
+                            {
+                                "event": "missed_spot",
+                                "late_by_hours": round(current_hour - target_hour, 3),
+                            },
+                        )
                 print(
                     f"[{t}][{name}][DRIVING] Arrived at \"{target['name']}\"! "
                     f"pos=({agent.x:.1f}, {agent.y:.1f})"
