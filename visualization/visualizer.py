@@ -92,7 +92,7 @@ class WorldVisualizer:
                     break
 
             self.world_renderer.draw_background(screen)
-            self.world_renderer.draw_grid(screen)
+            self.world_renderer.draw_grid(screen, self.world_clock)
 
             for cs in self.cs_agents:
                 self.cs_renderer.draw(screen, font, cs)
