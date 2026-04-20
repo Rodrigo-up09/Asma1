@@ -26,6 +26,17 @@ class CSRequestQueue:
     def contains_ev(self, ev_jid: str) -> bool:
         return any(item.get("ev_jid") == ev_jid for item in self._items)
 
+    def remove_ev(self, ev_jid: str) -> bool:
+        """Remove an EV from queue if present.
+
+        Returns True if removed, False otherwise.
+        """
+        for index, item in enumerate(self._items):
+            if item.get("ev_jid") == ev_jid:
+                self._items.pop(index)
+                return True
+        return False
+
     def __len__(self) -> int:
         return len(self._items)
 

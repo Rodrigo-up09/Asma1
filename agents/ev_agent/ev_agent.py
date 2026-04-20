@@ -107,107 +107,119 @@ class EVAgent(Agent):
         self.world_clock = None
         self._day_offset = 0  # whole days elapsed since start for daily schedule
 
+    def _default_station_info(self, station_cfg: dict) -> dict:
+        return {
+            "jid": station_cfg["jid"],
+            "x": station_cfg["x"],
+            "y": station_cfg["y"],
+            "electricity_price": station_cfg.get("electricity_price", 0.15),
+            "used_doors": 0,
+            "expected_evs": 0,
+            "num_doors": station_cfg.get("num_doors", 2),
+            "actual_solar_capacity": station_cfg.get("actual_solar_capacity", 0.0),
+            "max_solar_capacity": station_cfg.get("max_solar_capacity", 1.0),
+            "solar_production_rate": station_cfg.get("solar_production_rate", 0.0),
+            "estimated_wait_minutes": 0.0,
+        }
+
+    async def collect_station_infos(self, state, timeout_seconds: float = 0.3) -> list[dict]:
+        """Query all CSs and return merged station info suitable for scoring."""
+        stations = self.cs_stations
+        if not stations:
+            return []
+
+        for st in stations:
+            await self.messaging_service.send_info_query(state, st["jid"])
+
+        responses = {}
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline and len(responses) < len(stations):
+            msg = await state.receive(timeout=0.05)
+            if not msg:
+                continue
+            info = self.messaging_service.parse_info_response(msg)
+            if info:
+                responses[info["jid"]] = info
+
+        station_infos = []
+        for st in stations:
+            station_infos.append(responses.get(st["jid"], self._default_station_info(st)))
+        return station_infos
+
+    async def commit_to_station(self, state, station_info: dict, assume_on_timeout: bool = True) -> bool:
+        """Send commitment to a specific CS and wait briefly for its ACK."""
+        from .utils import required_energy_kwh, calculate_arrival_time_hours
+
+        target_soc = getattr(self, "_trip_target_soc", self.target_soc)
+        required_energy = required_energy_kwh(
+            self.current_soc,
+            target_soc,
+            self.battery_capacity_kwh,
+        )
+        arrival_hours = calculate_arrival_time_hours(
+            self.x,
+            self.y,
+            {"x": station_info["x"], "y": station_info["y"]},
+            self.velocity,
+            self.world_clock,
+        )
+
+        target_jid = station_info["jid"]
+        await self.messaging_service.send_commit(
+            state,
+            target_jid,
+            str(self.jid).split("/")[0],
+            required_energy,
+            arrival_hours,
+        )
+
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            msg = await state.receive(timeout=0.05)
+            if not msg:
+                continue
+
+            sender = str(msg.sender).split("/")[0] if msg.sender else ""
+            if sender != target_jid:
+                continue
+
+            data = self.messaging_service.parse_response(msg)
+            return bool(data and data.get("status") == "commit_accepted")
+
+        return assume_on_timeout
+
     async def select_and_commit_cs(self, state) -> str | None:
         """Broadcast CS info request, pick the best CS, and send a commitment.
         Returns the chosen CS JID on success, or None if none available."""
-        stations = self.cs_stations
-        if not stations:
+        station_infos = await self.collect_station_infos(state)
+        if not station_infos:
             return None
 
         name = str(self.jid).split("@")[0]
         t = self.world_clock.formatted_time() if self.world_clock else "??:??"
 
-        # Broadcast info query to all CS JIDs
-        for st in stations:
-            await self.messaging_service.send_info_query(state, st["jid"])
-
-        # Collect responses briefly
-        responses = {}
-        deadline = time.monotonic() + 0.3
-        while time.monotonic() < deadline and len(responses) < len(stations):
-            msg = await state.receive(timeout=0.05)
-            if msg:
-                info = self.messaging_service.parse_info_response(msg)
-                if info:
-                    responses[info["jid"]] = info
-
-        # Build station_infos for scoring
-        def build_info(st):
-            jid = st["jid"]
-            if jid in responses:
-                r = responses[jid]
-                return {
-                    "jid": jid,
-                    "x": r["x"],
-                    "y": r["y"],
-                    "electricity_price": r["electricity_price"],
-                    "used_doors": r["used_doors"],
-                    "expected_evs": r.get("expected_evs", 0),
-                    "num_doors": r["num_doors"],
-                }
-            else:
-                return {
-                    "jid": jid,
-                    "x": st["x"],
-                    "y": st["y"],
-                    "electricity_price": st.get("electricity_price", 0.15),
-                    "used_doors": 0,
-                    "expected_evs": 0,
-                    "num_doors": st.get("num_doors", 2),
-                }
-
         from .utils import score_charging_station
-        station_infos = [build_info(st) for st in stations]
 
-        # Rank candidates
         candidates = []
         for info in station_infos:
             score = score_charging_station(self.x, self.y, info)
-            candidates.append((score, info["jid"], info))
+            candidates.append((score, info))
         candidates.sort(key=lambda x: x[0])
 
-        # Compute required energy
-        from .utils import required_energy_kwh, calculate_arrival_time_hours
-        target_soc = getattr(self, "_trip_target_soc", self.target_soc)
-        required_energy = required_energy_kwh(self.current_soc, target_soc, self.battery_capacity_kwh)
-
-        # Try candidates in order
-        for score, jid, info in candidates:
-            cs_pos = info
-            arrival_hours = calculate_arrival_time_hours(
-                self.x, self.y, {"x": cs_pos["x"], "y": cs_pos["y"]}, self.velocity, self.world_clock
-            )
-            await self.messaging_service.send_commit(
-                state,
-                jid,
-                str(self.jid).split("/")[0],
-                required_energy,
-                arrival_hours,
-            )
-            msg = await state.receive(timeout=0.2)
-            if msg:
-                data = self.messaging_service.parse_response(msg)
-                if data and data.get("status") == "commit_accepted":
-                    print(f"[{t}][{name}][SELECT] Committed to {jid} (req {required_energy:.1f} kWh)")
-                    self.current_cs_jid = jid
-                    return jid
-                else:
-                    print(f"[{t}][{name}][SELECT] Commit rejected by {jid}, trying next...")
-                    continue
-            else:
-                print(f"[{t}][{name}][SELECT] No explicit ACK from {jid}, assuming committed.")
+        for _, info in candidates:
+            accepted = await self.commit_to_station(state, info)
+            jid = info["jid"]
+            if accepted:
+                print(f"[{t}][{name}][SELECT] Committed to {jid}")
                 self.current_cs_jid = jid
                 return jid
+            print(f"[{t}][{name}][SELECT] Commit rejected by {jid}, trying next...")
 
-        # All CSs rejected the commitment (or no responses). Fallback: travel to the best-scoring CS anyway.
-        if candidates:
-            best_jid = candidates[0][2]["jid"]
-            print(f"[{t}][{name}][SELECT] All CSs rejected. Falling back to {best_jid} (no reservation).")
-            self.current_cs_jid = best_jid
-            return best_jid
-        else:
-            print(f"[{t}][{name}][SELECT] No CS stations available.")
-            return None
+        # All CSs rejected commitment. Fallback: go to best-scoring CS anyway.
+        best_jid = candidates[0][1]["jid"]
+        print(f"[{t}][{name}][SELECT] All CSs rejected. Falling back to {best_jid} (no reservation).")
+        self.current_cs_jid = best_jid
+        return best_jid
 
     async def reevaluate_cs_after_update(self, state, reason: str = "cs_update") -> None:
         """Cancel the current CS commitment, if any, so the EV can reselect."""
@@ -301,6 +313,7 @@ class EVAgent(Agent):
         fsm.add_transition(source=STATE_GOING_TO_CHARGER, dest=STATE_GOING_TO_CHARGER)
         fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_WAITING_QUEUE)
         fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_CHARGING)
+        fsm.add_transition(source=STATE_WAITING_QUEUE, dest=STATE_GOING_TO_CHARGER)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_CHARGING)
         fsm.add_transition(source=STATE_CHARGING, dest=STATE_DRIVING)
         fsm.add_transition(source=STATE_DRIVING, dest=STATE_STOPPED)

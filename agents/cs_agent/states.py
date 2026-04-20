@@ -191,6 +191,19 @@ class CSStateMixin:
             "expected_evs": len(agent.expected_evs),
             "num_doors": agent.num_doors,
             "electricity_price": agent.electricity_price,
+            "actual_solar_capacity": agent.actual_solar_capacity,
+            "max_solar_capacity": agent.max_solar_capacity,
+            "solar_production_rate": agent.solar_production_rate,
+            "estimated_wait_minutes": round(
+                calculate_wait_time_minutes(
+                    agent.active_charging,
+                    agent.request_queue.snapshot(),
+                    agent.num_doors,
+                    agent.max_charging_rate,
+                    pending_proposals=agent.pending_proposals,
+                ),
+                2,
+            ),
             "x": agent.x,
             "y": agent.y,
         }
@@ -249,13 +262,34 @@ class CSStateMixin:
         if not ev_jid:
             return
 
+        removed_expected = False
+        removed_pending = False
+        removed_incoming = False
+        removed_queue = False
+
         if ev_jid in agent.expected_evs:
             agent.expected_evs.remove(ev_jid)
-            print(f"[CS] {ev_jid} canceled commitment (expected now {len(agent.expected_evs)})")
-            # Notify interested EVs that load has decreased
+            removed_expected = True
+
+        if ev_jid in agent.pending_proposals:
+            retrieve_and_remove_proposal(agent.pending_proposals, ev_jid)
+            removed_pending = True
+
+        if ev_jid in agent.incoming_requests:
+            remove_incoming_request(agent.incoming_requests, ev_jid)
+            removed_incoming = True
+
+        removed_queue = agent.request_queue.remove_ev(ev_jid)
+
+        if removed_expected or removed_pending or removed_incoming or removed_queue:
+            print(
+                f"[CS] {ev_jid} cancel cleared "
+                f"expected={removed_expected}, pending={removed_pending}, "
+                f"incoming={removed_incoming}, queue={removed_queue}"
+            )
             await agent.notify_interested_evs(self, "cancel", exclude_ev_jid=ev_jid)
         else:
-            print(f"[CS] {ev_jid} cancel but no commitment found")
+            print(f"[CS] {ev_jid} cancel but no tracked data found")
 
     async def _on_inform(self, msg):
         agent = self.agent

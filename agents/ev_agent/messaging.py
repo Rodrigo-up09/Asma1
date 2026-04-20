@@ -115,6 +115,10 @@ class EVMessagingService:
                 "expected_evs": int(data.get("expected_evs", 0)),
                 "num_doors": int(data.get("num_doors", 1)),
                 "electricity_price": float(data.get("electricity_price", 0.15)),
+                "actual_solar_capacity": float(data.get("actual_solar_capacity", 0.0)),
+                "max_solar_capacity": float(data.get("max_solar_capacity", 1.0)),
+                "solar_production_rate": float(data.get("solar_production_rate", 0.0)),
+                "estimated_wait_minutes": float(data.get("estimated_wait_minutes", 0.0)),
                 "x": float(data.get("x", 0.0)),
                 "y": float(data.get("y", 0.0)),
             }

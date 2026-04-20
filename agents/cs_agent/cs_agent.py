@@ -113,6 +113,9 @@ class CSAgent(Agent):
             "expected_evs": len(self.expected_evs),
             "num_doors": self.num_doors,
             "electricity_price": self.electricity_price,
+            "actual_solar_capacity": self.actual_solar_capacity,
+            "max_solar_capacity": self.max_solar_capacity,
+            "solar_production_rate": self.solar_production_rate,
             "x": self.x,
             "y": self.y,
         }

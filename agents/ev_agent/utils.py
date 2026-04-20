@@ -190,8 +190,13 @@ def score_charging_station(
     distance = math.hypot(station["x"] - ev_x, station["y"] - ev_y)
     distance_score = distance  # Keep in original units (larger values = farther)
     
-    # Price component (normalized, already in €/kWh)
-    price_score = station.get("electricity_price", 0.15)
+    # Price component adjusted by available solar energy at the station.
+    # Mirrors CS-side discount model: up to 30% off when solar storage is full.
+    base_price = station.get("electricity_price", 0.15)
+    actual_solar = max(0.0, float(station.get("actual_solar_capacity", 0.0)))
+    max_solar = max(1e-6, float(station.get("max_solar_capacity", 1.0)))
+    solar_discount = min(0.3, (actual_solar / max_solar) * 0.3)
+    price_score = base_price * (1.0 - solar_discount)
     
     # Load component (0.0 to 1.0, where 1.0 = completely full)
     used_doors = station.get("used_doors", 0)
