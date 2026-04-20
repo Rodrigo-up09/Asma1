@@ -142,6 +142,7 @@ class EVAgent(Agent):
                     "y": r["y"],
                     "electricity_price": r["electricity_price"],
                     "used_doors": r["used_doors"],
+                    "expected_evs": r.get("expected_evs", 0),
                     "num_doors": r["num_doors"],
                 }
             else:
@@ -151,6 +152,7 @@ class EVAgent(Agent):
                     "y": st["y"],
                     "electricity_price": st.get("electricity_price", 0.15),
                     "used_doors": 0,
+                    "expected_evs": 0,
                     "num_doors": st.get("num_doors", 2),
                 }
 
@@ -206,6 +208,27 @@ class EVAgent(Agent):
         else:
             print(f"[{t}][{name}][SELECT] No CS stations available.")
             return None
+
+    async def reevaluate_cs_after_update(self, state, reason: str = "cs_update") -> None:
+        """Cancel the current CS commitment, if any, so the EV can reselect."""
+        name = str(self.jid).split("@")[0]
+        t = self.world_clock.formatted_time() if self.world_clock else "??:??"
+
+        if self.current_cs_jid:
+            print(
+                f"[{t}][{name}][SELECT] CS update '{reason}' received; cancelling {self.current_cs_jid} and re-evaluating."
+            )
+            await self.messaging_service.send_cancel(
+                state,
+                self.current_cs_jid,
+                str(self.jid).split("/")[0],
+            )
+        else:
+            print(f"[{t}][{name}][SELECT] CS update '{reason}' received; re-evaluating.")
+
+        self.current_cs_jid = None
+        if hasattr(self, "_trip_target_soc"):
+            delattr(self, "_trip_target_soc")
 
     def mark_deadline_missed(self):
         """Advance schedule index to skip the destination that was just missed."""

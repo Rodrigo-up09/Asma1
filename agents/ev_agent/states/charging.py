@@ -26,6 +26,14 @@ class ChargingState(State):
         time_before = clock.sim_hours
         t = clock.formatted_time()
 
+        msg = await self.receive(timeout=0)
+        if msg:
+            response_data = agent.messaging_service.parse_response(msg)
+            if response_data and response_data.get("status") == "cs_update":
+                print(
+                    f"[{t}][{name}][CHARGING] CS update '{response_data.get('reason', 'cs_update')}' ignored while charging."
+                )
+
         # Wait for real time to pass, then calculate actual sim time elapsed
         await asyncio.sleep(TICK_SLEEP_SECONDS)
         time_after = clock.sim_hours

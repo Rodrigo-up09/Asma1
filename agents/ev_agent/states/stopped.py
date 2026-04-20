@@ -48,34 +48,31 @@ class StoppedState(State):
         agent = self.agent
         if agent.current_soc <= agent.low_soc_threshold and not agent.current_cs_jid:
             print(
-                f"[{t}][{name}][STOPPED] SoC below {agent.low_soc_threshold:.0%}, selecting CS..."
+                f"[{t}][{name}][STOPPED] SoC below {agent.low_soc_threshold:.0%}, heading to charger and evaluating CS on departure..."
             )
             # Determine the next scheduled destination so we know where to go after charging
             next_stop = agent.next_target()
             if next_stop:
                 agent.current_destination = next_stop
-                # Compute distance to next stop
-                dist = math.hypot(next_stop["x"] - agent.x, next_stop["y"] - agent.y)
-                # Measure tick duration and compute travel time, current sim time
-                travel_hours, tick_sim_hours, now = await self._calculate_timing(dist)
-                target_hour = next_stop["hour"]
-                time_until_arrival = self._calculate_time_until_arrival(target_hour, now)
-                # Determine if a charging detour is needed and compute trip target SOC
-                await self._handle_charging_detour(
-                    next_stop, dist, travel_hours, tick_sim_hours, time_until_arrival, t, name
-                )
-            # If no scheduled stop, we still need to charge; no trip target will be set.
-            chosen = await self.agent.select_and_commit_cs(self)
-            if chosen:
-                if agent.current_cs_jid is None:
-                    agent.current_cs_jid = chosen
-                self.set_next_state(STATE_GOING_TO_CHARGER)
-                return True
-            else:
-                print(f"[{t}][{name}][STOPPED] No CS available yet, will retry.")
-                await asyncio.sleep(1)
-                return False
+            agent.current_cs_jid = None
+            self.set_next_state(STATE_GOING_TO_CHARGER)
+            return True
         return False
+
+    def _needs_charge_detour(self, dist: float, tick_sim_hours: float) -> bool:
+        """Decide whether the next trip needs charging based on distance only."""
+        if dist <= 0:
+            return False
+
+        energy_needed = _estimate_energy_for_trip(
+            dist,
+            self.agent.velocity,
+            self.agent.energy_per_km,
+            tick_sim_hours,
+        )
+        current_energy = self.agent.current_soc * self.agent.battery_capacity_kwh
+        reserve = self.agent.low_soc_threshold * self.agent.battery_capacity_kwh
+        return current_energy - reserve < energy_needed
 
     async def _get_next_stop_and_distances(self, t: str):
         """Get next destination and calculate distances."""
@@ -262,7 +259,7 @@ class StoppedState(State):
         )
 
     async def _make_departure_decision(self, next_stop: dict, needs_charge_detour: bool, 
-                                       travel_hours: float, detour_total_hours: float,
+                                       travel_hours: float,
                                        time_until_arrival: float, t: str, name: str):
         """Decide whether to depart now and which route to take.
         
@@ -271,32 +268,24 @@ class StoppedState(State):
         next_state : str or None
             STATE_DRIVING, STATE_GOING_TO_CHARGER, or None to remain STOPPED.
         """
-        total_travel_hours = detour_total_hours if needs_charge_detour else travel_hours
+        leave_threshold = travel_hours + 1.0
         
         print(
             f"[{t}][{name}][STOPPED] Departure calculation:\n"
             f"  Time until arrival: {time_until_arrival:.2f} hours\n"
-            f"  Total travel time needed: {total_travel_hours:.2f} hours\n"
+            f"  Total travel time needed: {travel_hours:.2f} hours\n"
             f"  Needs charge detour: {needs_charge_detour}\n"
-            f"  Should leave: {time_until_arrival <= total_travel_hours}"
+            f"  One-hour-early leave threshold: {leave_threshold:.2f} hours\n"
+            f"  Should leave: {time_until_arrival <= leave_threshold}"
         )
         
-        if time_until_arrival <= total_travel_hours:
+        if time_until_arrival <= leave_threshold:
             if needs_charge_detour:
-                # Need to charge first; select and commit to a CS if not already chosen
-                if not self.agent.current_cs_jid:
-                    print(
-                        f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
-                        f"(need charging detour). Selecting CS..."
-                    )
-                    chosen = await self.agent.select_and_commit_cs(self)
-                    if not chosen:
-                        print(f"[{t}][{name}][STOPPED] Could not secure CS, will retry.")
-                        return None
-                    # If we have a chosen CS but current_cs_jid wasn't set (fallback case), set it now
-                    if self.agent.current_cs_jid is None:
-                        self.agent.current_cs_jid = chosen
-                # else: already have a committed CS from earlier
+                print(
+                    f"[{t}][{name}][STOPPED] Not enough energy for \"{next_stop['name']}\" "
+                    f"(need charging detour). Evaluating CS at departure..."
+                )
+                self.agent.current_cs_jid = None
                 self.agent.current_destination = next_stop
                 return STATE_GOING_TO_CHARGER
             else:
@@ -308,7 +297,7 @@ class StoppedState(State):
                 return STATE_DRIVING
         
         # Still waiting - log status
-        time_until_leave = time_until_arrival - total_travel_hours
+        time_until_leave = time_until_arrival - leave_threshold
         charge_note = " ⚡needs charge" if needs_charge_detour else ""
         target_hour = next_stop["hour"]
         # Display time-of-day (wrap at 24h)
@@ -351,14 +340,12 @@ class StoppedState(State):
             target_hour = next_stop["hour"]
             time_until_arrival = self._calculate_time_until_arrival(target_hour, now)
             
-            # Check if charging detour is needed
-            needs_charge_detour, detour_total_hours = await self._handle_charging_detour(
-                next_stop, dist, travel_hours, tick_sim_hours, time_until_arrival, t, name
-            )
+            # Check if charging detour is needed using distance only.
+            needs_charge_detour = self._needs_charge_detour(dist, tick_sim_hours)
             
             # Make departure decision
             next_state = await self._make_departure_decision(
-                next_stop, needs_charge_detour, travel_hours, detour_total_hours,
+                next_stop, needs_charge_detour, travel_hours,
                 time_until_arrival, t, name
             )
             if next_state is not None:

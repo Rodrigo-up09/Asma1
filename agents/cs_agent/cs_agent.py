@@ -82,7 +82,8 @@ class CSAgent(Agent):
         self.y = config.y
 
         self.used_doors = 0
-        self.reserved_doors = 0  # doors reserved by EVs that committed but haven't arrived
+        self.reserved_doors = 0  # legacy field; committed travelers are tracked in expected_evs
+        self.interested_evs = set()
         self.request_queue = CSRequestQueue()
         self.active_charging = {}
         self.incoming_requests = {}  # EV JID -> {arriving_hours, required_energy, max_rate}
@@ -99,6 +100,27 @@ class CSAgent(Agent):
 
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = world_jid
+
+    async def notify_interested_evs(self, state, reason: str, exclude_ev_jid: str | None = None) -> None:
+        """Notify all EVs that requested station info that this CS state changed."""
+        if not self.interested_evs:
+            return
+
+        extra = {
+            "reason": reason,
+            "jid": str(self.jid).split("@")[0],
+            "used_doors": self.used_doors,
+            "expected_evs": len(self.expected_evs),
+            "num_doors": self.num_doors,
+            "electricity_price": self.electricity_price,
+            "x": self.x,
+            "y": self.y,
+        }
+        for ev_jid in list(self.interested_evs):
+            if exclude_ev_jid and ev_jid == exclude_ev_jid:
+                continue
+            await self.messaging_service.send_station_update(state, ev_jid, reason, extra=extra)
+
     def solar_discount(self):
         if self.actual_solar_capacity <= 0.0:
             return 0.0
@@ -172,6 +194,8 @@ class CSAgent(Agent):
                 "energy_price": self.energy_price,
             }
         )
+
+        await self.notify_interested_evs(state, "accept_request", exclude_ev_jid=ev_jid)
 
         if from_queue:
             print(

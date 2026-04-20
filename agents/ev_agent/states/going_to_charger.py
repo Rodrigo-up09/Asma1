@@ -132,6 +132,12 @@ class GoingToChargerState(State):
             next_state: STATE_CHARGING or STATE_WAITING_QUEUE, or STATE_GOING_TO_CHARGER if error
         """
         name = str(agent.jid).split("@")[0]
+
+        status = response_data.get("status")
+        if status == "cs_update":
+            await agent.reevaluate_cs_after_update(self, response_data.get("reason", "cs_update"))
+            print(f"[{t}][{name}][GOING_TO_CHARGER] CS update received; reselecting before continuing.")
+            return STATE_GOING_TO_CHARGER
         
         # Confirm proposal with CS
         confirmed, decision_msg = await handle_cs_proposal(

@@ -29,6 +29,22 @@ class CSMessagingService:
         await state.send(msg)
         print(f"[CS] -> {to_jid}: {status}")
 
+    async def send_station_update(
+        self,
+        state: Any,
+        to_jid: str,
+        reason: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        msg = Message(to=str(to_jid))
+        msg.set_metadata("protocol", self.EV_PROTOCOL)
+        msg.set_metadata("performative", "inform")
+        body = {"status": "cs_update", "reason": reason}
+        if extra:
+            body.update(extra)
+        msg.body = json.dumps(body)
+        await state.send(msg)
+
     def parse_request(self, msg: Any, default_max_charging_rate: float) -> Optional[Dict[str, Any]]:
         try:
             data = json.loads(msg.body)

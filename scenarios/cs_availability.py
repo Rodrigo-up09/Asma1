@@ -19,9 +19,9 @@ class CSAvailability(Scenario):
     def __init__(self):
         super().__init__(
             name="CS Availability",
-            description="5 EVs, 2 CS (close+limited vs distant+free). Tests station selection when full.",
+            description="10 EVs, 2 CS (close+limited vs distant+free). Tests station selection when full.",
         )
-        self.num_evs = 5
+        self.num_evs = 10
         self.num_css = 2
         self.night_driver_ratio = 0.0
         
@@ -55,7 +55,7 @@ class CSAvailability(Scenario):
                 "jid": "cs2@localhost",
                 "password": "password",
                 "config": CSConfig(
-                    num_doors=1, 
+                    num_doors=3,
                     max_charging_rate=12.0,
                     max_solar_capacity=150.0,
                     actual_solar_capacity=120.0,
@@ -85,7 +85,7 @@ class CSAvailability(Scenario):
             # Generate hourly schedule for maximum chaos
             schedule = generate_scenario_schedule(home_x, home_y, self.spots)
             
-            config = base_configs[i - 1]
+            config = base_configs[(i - 1) % len(base_configs)]
             self.ev_configs.append({
                 "jid": f"ev{i}@localhost",
                 "password": "password",

@@ -100,7 +100,11 @@ class EVMessagingService:
     def parse_info_response(
         self, msg: Any
     ) -> Optional[Dict[str, Any]]:
-        """Parse a CS info response. Returns dict with keys: jid, used_doors, num_doors, electricity_price, x, y."""
+        """Parse a CS info response.
+
+        Returns dict with keys: jid, used_doors, expected_evs, num_doors,
+        electricity_price, x, y.
+        """
         try:
             data = json.loads(msg.body)
             if data.get("type") != "cs_info_response":
@@ -108,6 +112,7 @@ class EVMessagingService:
             return {
                 "jid": data.get("jid", ""),
                 "used_doors": int(data.get("used_doors", 0)),
+                "expected_evs": int(data.get("expected_evs", 0)),
                 "num_doors": int(data.get("num_doors", 1)),
                 "electricity_price": float(data.get("electricity_price", 0.15)),
                 "x": float(data.get("x", 0.0)),

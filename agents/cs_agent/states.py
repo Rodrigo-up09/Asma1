@@ -35,7 +35,7 @@ async def _report_load(state) -> None:
     """Send current load kW to the WorldAgent after any door change."""
     agent = state.agent
     world_jid = getattr(agent, "world_jid", None)
-    current_load = agent.used_doors * agent.max_charging_rate
+    current_load = (agent.used_doors + (0.5 * len(agent.expected_evs))) * agent.max_charging_rate
     await _send_stat(
         state,
         world_jid,
@@ -122,6 +122,10 @@ class CSStateMixin:
             print(f"[CS] Ignored duplicate request from {ev_jid} (already charging)")
             return
 
+        if ev_jid in agent.expected_evs:
+            agent.expected_evs.remove(ev_jid)
+            print(f"[CS] {ev_jid} arrived after commitment (expected now {len(agent.expected_evs)})")
+
         # Determine decision (accept or wait)
         if self._can_offer_accept(agent, parsed):
             decision = "accept"
@@ -163,6 +167,8 @@ class CSStateMixin:
             f"[CS] Proposed {decision.upper()} to {ev_jid} | Pending: {len(agent.pending_proposals)}"
         )
 
+        await agent.notify_interested_evs(self, f"proposal_{decision}", exclude_ev_jid=ev_jid)
+
     async def _on_query(self, msg):
         """Handle CS info request from EV.
         EV asks for current station status (used_doors, num_doors, electricity_price, x, y).
@@ -182,11 +188,14 @@ class CSStateMixin:
             "type": "cs_info_response",
             "jid": str(agent.jid).split("/")[0],
             "used_doors": agent.used_doors,
+            "expected_evs": len(agent.expected_evs),
             "num_doors": agent.num_doors,
             "electricity_price": agent.electricity_price,
             "x": agent.x,
             "y": agent.y,
         }
+
+        agent.interested_evs.add(ev_jid)
 
         reply = Message(to=str(msg.sender))
         reply.set_metadata("protocol", agent.messaging_service.EV_PROTOCOL)
@@ -219,16 +228,11 @@ class CSStateMixin:
             await agent.messaging_service.send_response(self, ev_jid, "commit_accepted")
             return
 
-        # Reserve a door (count against capacity)
-        if (agent.used_doors + agent.reserved_doors) < agent.num_doors:
-            agent.expected_evs.add(ev_jid)
-            agent.reserved_doors += 1
-            print(f"[CS] {ev_jid} committed (reserved {agent.reserved_doors}/{agent.num_doors} doors)")
-            await agent.messaging_service.send_response(self, ev_jid, "commit_accepted")
-        else:
-            # Station is fully reserved; cannot accept commitment
-            print(f"[CS] {ev_jid} commit REJECTED — no available doors")
-            await agent.messaging_service.send_response(self, ev_jid, "commit_rejected", extra={"reason": "no_available_doors"})
+        # Track this EV as expected, but do not reserve a door.
+        agent.expected_evs.add(ev_jid)
+        print(f"[CS] {ev_jid} committed (expected now {len(agent.expected_evs)})")
+        await agent.messaging_service.send_response(self, ev_jid, "commit_accepted")
+        await agent.notify_interested_evs(self, "commit_accepted", exclude_ev_jid=ev_jid)
 
     async def _on_cancel(self, msg):
         """Handle EV cancellation of a prior commitment."""
@@ -247,8 +251,9 @@ class CSStateMixin:
 
         if ev_jid in agent.expected_evs:
             agent.expected_evs.remove(ev_jid)
-            agent.reserved_doors = max(0, agent.reserved_doors - 1)
-            print(f"[CS] {ev_jid} canceled commitment (reserved now {agent.reserved_doors}/{agent.num_doors} doors)")
+            print(f"[CS] {ev_jid} canceled commitment (expected now {len(agent.expected_evs)})")
+            # Notify interested EVs that load has decreased
+            await agent.notify_interested_evs(self, "cancel", exclude_ev_jid=ev_jid)
         else:
             print(f"[CS] {ev_jid} cancel but no commitment found")
 
@@ -311,6 +316,7 @@ class CSStateMixin:
                 await _report_load(self)
                 # ── immediately try to serve queued EVs ──
                 await self._process_queue()
+                await agent.notify_interested_evs(self, "charge_complete", exclude_ev_jid=ev_jid)
 
     async def _handle_proposal_confirmed(self, ev_jid: str):
         """Handle EV confirmation of proposal."""
@@ -337,6 +343,7 @@ class CSStateMixin:
                 f"[CS] {ev_jid} CONFIRMED ACCEPT | Active: {len(agent.active_charging)} | Doors used: {agent.used_doors}/{agent.num_doors}"
             )
             await _report_load(self)
+            await agent.notify_interested_evs(self, "proposal_confirmed_accept", exclude_ev_jid=ev_jid)
 
         elif decision == "wait":
             # Register in queue
@@ -344,6 +351,7 @@ class CSStateMixin:
             print(
                 f"[CS] {ev_jid} CONFIRMED WAIT | Queue size: {len(agent.request_queue)} | Incoming: {len(agent.incoming_requests)}"
             )
+            await agent.notify_interested_evs(self, "proposal_confirmed_wait", exclude_ev_jid=ev_jid)
 
     async def _handle_proposal_rejected(self, ev_jid: str):
         """Handle EV rejection of proposal."""

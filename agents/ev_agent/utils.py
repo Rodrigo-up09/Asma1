@@ -181,7 +181,7 @@ def score_charging_station(
     Args:
         ev_x: EV x position
         ev_y: EV y position
-        station: Station dict with keys: jid, x, y, electricity_price, used_doors, num_doors
+        station: Station dict with keys: jid, x, y, electricity_price, used_doors, expected_evs, num_doors
         
     Returns:
         Composite score (lower is better)
@@ -195,8 +195,9 @@ def score_charging_station(
     
     # Load component (0.0 to 1.0, where 1.0 = completely full)
     used_doors = station.get("used_doors", 0)
+    expected_evs = station.get("expected_evs", station.get("reserved_doors", 0))
     num_doors = station.get("num_doors", 1)
-    load_factor = used_doors / num_doors if num_doors > 0 else 1.0
+    load_factor = (used_doors + (0.5 * expected_evs)) / num_doors if num_doors > 0 else 1.0
     
     # Composite score with configurable weights
     composite_score = (
