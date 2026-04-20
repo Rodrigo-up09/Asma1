@@ -161,13 +161,18 @@ def _generate_scenario_ev_deployment(scenario, cs_stations) -> list[dict]:
 
 
 async def main():
-    # ── Configure EV CS selection strategy: prefer available stations ──
+    # ── Default CS selection strategy ──
     set_cs_selection_weights(distance=0.5, price=0.5, load=1)
     
     # ── Show scenario menu ───────────────────────────────────────────
     selected_scenario = display_menu()
     
     if selected_scenario:
+        # Scenario-specific strategy tuning
+        if selected_scenario.__class__.__name__ == "PriceComparison":
+            # Emphasize price in scenario 1 so lowest-price CS is more evident.
+            set_cs_selection_weights(distance=0.2, price=1.8, load=0.4)
+
         # ── Use preset scenario ──────────────────────────────────────
         print(f"\n📋 Loaded scenario: {selected_scenario.name}")
         print(f"   {selected_scenario.description}\n")

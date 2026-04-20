@@ -19,7 +19,7 @@ class PriceComparison(Scenario):
     def __init__(self):
         super().__init__(
             name="Price Comparison",
-            description="1 EV, 3 CS with different prices. EV chooses lowest price.",
+            description="1 EV, frequent trips + 3 CS with different prices. EV should often pick the lowest-price station.",
         )
         self.num_evs = 1
         self.num_css = 3
@@ -83,19 +83,25 @@ class PriceComparison(Scenario):
         # Generate dynamic schedules for each EV
         self.ev_configs = []
         for i in range(1, self.num_evs + 1):
-            home_x, home_y = random.uniform(-5, 5), random.uniform(-5, 5)
-            schedule = generate_scenario_schedule(home_x, home_y, self.spots, num_stops=3)
+            home_x, home_y = random.uniform(-12, 12), random.uniform(-12, 12)
+
+            # More frequent appointments across the day to force repeated travel/charging.
+            schedule = generate_scenario_schedule(home_x, home_y, self.spots, num_stops=6)
+            frequent_time_slots = [8.0, 10.0, 12.0, 14.0, 16.0, 18.0]
+            for idx, stop in enumerate(schedule[:-1]):  # keep final home stop at 20:00
+                if idx < len(frequent_time_slots):
+                    stop["hour"] = frequent_time_slots[idx]
             
             self.ev_configs.append({
                 "jid": f"ev{i}@localhost",
                 "password": "password",
                 "config": {
-                    "battery_capacity_kwh": 60.0,
-                    "current_soc": 0.25,  # Low SoC to force charging
+                    "battery_capacity_kwh": 45.0,
+                    "current_soc": 0.18,  # Low SoC + frequent travel forces repeated charging
                     "target_soc": 0.80,
-                    "max_charge_rate_kw": 15.0,
-                    "velocity": 3.0,
-                    "energy_per_km": 2.0,
+                    "max_charge_rate_kw": 12.0,
+                    "velocity": 2.6,
+                    "energy_per_km": 3.4,
                     "x": home_x,
                     "y": home_y,
                     "schedule": schedule,
