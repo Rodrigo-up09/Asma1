@@ -9,6 +9,7 @@ from .cs_availability import CSAvailability
 from .random_scenario import RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
 from .dynamic_scheduling import DynamicScheduling
 from .time_constraints import TimeConstraintScenario
+from .urgency_modeling import UrgencyModelingScenario
 from .utils import generate_scenario_schedule, generate_hourly_schedule
 
 # Registry of all available scenarios
@@ -18,6 +19,7 @@ SCENARIOS = [
     RandomScenario(),
     DynamicScheduling(),
     TimeConstraintScenario(),
+    UrgencyModelingScenario(),
 ]
 
 
@@ -65,6 +67,7 @@ __all__ = [
     "RandomScenario",
     "DynamicScheduling",
     "TimeConstraintScenario",
+    "UrgencyModelingScenario",
     "SCENARIOS",
     "get_scenario_by_index",
     "display_menu",

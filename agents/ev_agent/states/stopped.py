@@ -4,6 +4,7 @@ import math
 from spade.behaviour import State
 
 from ..utils import closest_station
+from ..urgency_model import UrgencyModel
 from .constants import (
     STATE_DRIVING,
     STATE_GOING_TO_CHARGER,
@@ -82,13 +83,17 @@ class StoppedState(State):
     def _calculate_time_until_arrival(self, target_hour: float, now: float):
         """Calculate hours remaining until target arrival time.
         
-        With multi-day schedules, both target_hour and now can be unbounded.
-        Simply return the difference.
+        With multi-day schedules, target_hour is always 0-24 (time of day).
+        We need to adjust by day offset to get actual sim_hours.
+        Each day is 24 hours of simulation time.
         """
-        return target_hour - now
+        # Adjust target hour by day offset
+        adjusted_target = target_hour + (self.agent._day_offset * 24)
+        return adjusted_target - now
 
     async def _handle_charging_detour(self, next_stop: dict, dist: float, travel_hours: float, 
-                                     tick_sim_hours: float, time_until_arrival: float, t: str, name: str):
+                                     tick_sim_hours: float, time_until_arrival: float, t: str, name: str,
+                                     current_time: float = None):
         """Determine if a charging detour is needed and calculate its duration."""
         if dist <= 0:
             return False, 0.0
@@ -119,14 +124,14 @@ class StoppedState(State):
         # Calculate detour path
         detour_time = await self._calculate_detour_path(
             next_stop, cs_jid, dist_to_cs, energy_needed, current_energy, 
-            time_until_arrival, tick_sim_hours, t, name
+            time_until_arrival, tick_sim_hours, t, name, current_time
         )
         
         return True, detour_time
 
     async def _calculate_detour_path(self, next_stop: dict, cs_jid: str, dist_to_cs: float,
                                      energy_needed: float, current_energy: float, time_until_arrival: float,
-                                     tick_sim_hours: float, t: str, name: str):
+                                     tick_sim_hours: float, t: str, name: str, current_time: float = None):
         """Calculate the full detour path: home → CS → destination."""
         cs_station = next((s for s in self.agent.cs_stations if s["jid"] == cs_jid), None)
         
@@ -168,9 +173,10 @@ class StoppedState(State):
         # Available charging time
         available_charge_time = time_until_arrival - travel_to_cs - travel_cs_to_dest
         
-        # Calculate target SoC
+        # Calculate target SoC with urgency adjustments
         trip_target_soc = self._calculate_target_soc(
-            soc_at_cs, available_charge_time, energy_cs_to_dest, t, name
+            soc_at_cs, available_charge_time, energy_cs_to_dest, t, name,
+            destination=next_stop, current_time=current_time
         )
         
         self.agent._trip_target_soc = trip_target_soc
@@ -190,10 +196,39 @@ class StoppedState(State):
         return detour_total_hours
 
     def _calculate_target_soc(self, soc_at_cs: float, available_charge_time: float,
-                               energy_cs_to_dest: float, t: str, name: str) -> float:
-        """Calculate target SoC for this trip given available charging time."""
+                               energy_cs_to_dest: float, t: str, name: str,
+                               destination: dict = None, current_time: float = None) -> float:
+        """Calculate target SoC for this trip given available charging time.
+        
+        Adjusted by urgency if destination has time constraints.
+        """
         min_soc_needed = soc_at_cs + (energy_cs_to_dest / self.agent.battery_capacity_kwh) + self.agent.low_soc_threshold
         min_soc_needed = min(1.0, min_soc_needed)
+        
+        # Calculate urgency-based adjustments if destination provided
+        urgency_boost = 1.0
+        if destination and current_time is not None:
+            try:
+                distance = math.hypot(destination["x"] - self.agent.x, destination["y"] - self.agent.y)
+                urgency_metrics = UrgencyModel.calculate_metrics(
+                    current_time=current_time,
+                    destination=destination,
+                    current_soc=soc_at_cs,
+                    distance_to_destination=distance,
+                    velocity=self.agent.velocity,
+                )
+                urgency_boost = urgency_metrics.charging_multiplier
+                
+                # Log urgency adjustment
+                if urgency_boost > 1.0:
+                    print(
+                        f"[{t}][{name}][STOPPED] {UrgencyModel.format_urgency_metrics(urgency_metrics)}"
+                    )
+            except Exception:
+                pass  # Fall back to no urgency adjustment
+        
+        # Apply urgency boost to min SoC
+        min_soc_needed = min(1.0, min_soc_needed * urgency_boost)
         
         if available_charge_time <= 0:
             print(
@@ -321,7 +356,7 @@ class StoppedState(State):
             
             # Check if charging detour is needed
             needs_charge_detour, detour_total_hours = await self._handle_charging_detour(
-                next_stop, dist, travel_hours, tick_sim_hours, time_until_arrival, t, name
+                next_stop, dist, travel_hours, tick_sim_hours, time_until_arrival, t, name, now
             )
             
             # Make departure decision

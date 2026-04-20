@@ -9,6 +9,7 @@ from spade.template import Template
 from .messaging import EVMessagingService
 from .schedule_manager import ScheduleManager
 from .time_constraints import TimeConstraintManager, Priority
+from .urgency_model import UrgencyModel
 from .states import (
     ChargingState,
     DrivingState,
