@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 import spade
 from spade.agent import Agent
@@ -11,9 +11,9 @@ from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from .messaging import CSMessagingService
+from .models import ActiveChargingSession, CSConfig, ChargingRequest, IncomingRequest, PendingProposal, StationSnapshot
 from .queue_manager import CSRequestQueue
 from .states import AvailableState, CSChargingFSM, FullState, STATE_AVAILABLE, STATE_FULL
-from .models import CSConfig
 from .utils import count_pending_slot_reservations
 
 
@@ -82,16 +82,15 @@ class CSAgent(Agent):
         self.y = config.y
 
         self.used_doors = 0
-        self.reserved_doors = 0  # legacy field; committed travelers are tracked in expected_evs
-        self.interested_evs = set()
+        self.interested_evs: set[str] = set()
         self.request_queue = CSRequestQueue()
-        self.active_charging = {}
-        self.incoming_requests = {}  # EV JID -> {arriving_hours, required_energy, max_rate}
-        self.pending_proposals = {}  # EV JID -> {proposal_data, decision} awaiting confirmation
-        self.expected_evs = set()     # EV JIDs that committed and are expected to arrive
+        self.active_charging: dict[str, ActiveChargingSession] = {}
+        self.incoming_requests: dict[str, IncomingRequest] = {}
+        self.pending_proposals: dict[str, PendingProposal] = {}
+        self.expected_evs: set[str] = set()
         self.messaging_service = CSMessagingService()
-        self.world_clock = None
-        self._last_solar_update_sim_hours = None
+        self.world_clock: WorldClock | None = None
+        self._last_solar_update_sim_hours: float | None = None
         
         # World-state — updated by WorldUpdateBehaviour on each broadcast
         self.electricity_price: float = self.energy_price
@@ -101,13 +100,8 @@ class CSAgent(Agent):
         # WorldAgent JID — set by main.py after construction
         self.world_jid: str = world_jid
 
-    async def notify_interested_evs(self, state, reason: str, exclude_ev_jid: str | None = None) -> None:
-        """Notify all EVs that requested station info that this CS state changed."""
-        if not self.interested_evs:
-            return
-
-        extra = {
-            "reason": reason,
+    def build_station_snapshot(self) -> StationSnapshot:
+        return {
             "jid": str(self.jid).split("@")[0],
             "used_doors": self.used_doors,
             "expected_evs": len(self.expected_evs),
@@ -119,10 +113,54 @@ class CSAgent(Agent):
             "x": self.x,
             "y": self.y,
         }
+
+    async def notify_interested_evs(self, state, reason: str, exclude_ev_jid: str | None = None) -> None:
+        """Notify all EVs that requested station info that this CS state changed."""
+        if not self.interested_evs:
+            return
+
+        extra = self.build_station_snapshot()
+        extra["reason"] = reason
         for ev_jid in list(self.interested_evs):
             if exclude_ev_jid and ev_jid == exclude_ev_jid:
                 continue
             await self.messaging_service.send_station_update(state, ev_jid, reason, extra=extra)
+
+    def register_expected_arrival(self, ev_jid: str) -> bool:
+        if ev_jid in self.expected_evs:
+            return False
+        self.expected_evs.add(ev_jid)
+        return True
+
+    def consume_expected_arrival(self, ev_jid: str) -> bool:
+        if ev_jid not in self.expected_evs:
+            return False
+        self.expected_evs.remove(ev_jid)
+        return True
+
+    def clear_tracking_for_ev(self, ev_jid: str) -> dict[str, bool]:
+        removed_expected = self.consume_expected_arrival(ev_jid)
+        removed_pending = self.pending_proposals.pop(ev_jid, None) is not None
+        removed_incoming = self.incoming_requests.pop(ev_jid, None) is not None
+        removed_queue = self.request_queue.remove_ev(ev_jid)
+        return {
+            "expected": removed_expected,
+            "pending": removed_pending,
+            "incoming": removed_incoming,
+            "queue": removed_queue,
+        }
+
+    def register_active_session(self, ev_jid: str, request_data: ChargingRequest) -> None:
+        self.used_doors += 1
+        self.active_charging[ev_jid] = {
+            "required_energy": request_data.get("required_energy", 0.0),
+            "rate": request_data.get("max_charging_rate", self.max_charging_rate),
+            "price": self.energy_price,
+        }
+        self.incoming_requests.pop(ev_jid, None)
+
+    def queue_confirmed_request(self, request_data: ChargingRequest) -> None:
+        self.request_queue.enqueue(request_data)
 
     def solar_discount(self):
         if self.actual_solar_capacity <= 0.0:

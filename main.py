@@ -387,4 +387,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    spade.run(main())
+    try:
+        spade.run(main())
+    except Exception as e:
+        print(f"\n❌ ERROR: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise

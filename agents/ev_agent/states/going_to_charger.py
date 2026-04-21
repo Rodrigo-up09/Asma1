@@ -6,15 +6,14 @@ from spade.behaviour import State
 from ..utils import (
     apply_energy_drain,
     calculate_arrival_time_hours,
-    closest_station,
     get_station_position,
-    handle_cs_proposal,
     move_towards,
     required_energy_kwh,
 )
 from .constants import (
     STATE_CHARGING,
     STATE_GOING_TO_CHARGER,
+    STATE_STOPPED,
     STATE_WAITING_QUEUE,
     TICK_SLEEP_SECONDS,
     send_stat,
@@ -142,11 +141,10 @@ class GoingToChargerState(State):
             return STATE_GOING_TO_CHARGER
         
         # Confirm proposal with CS
-        confirmed, decision_msg = await handle_cs_proposal(
+        confirmed, decision_msg = await agent.confirm_cs_proposal(
             self,
-            agent,
-            response_data,
             agent.current_cs_jid,
+            response_data,
         )
         
         if not confirmed:

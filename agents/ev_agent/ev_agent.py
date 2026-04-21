@@ -2,13 +2,14 @@ import json
 import random
 import time
 
-from typing import Optional
+from typing import Any
 
 from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from .messaging import EVMessagingService
+from .models import EVConfig, EVResponse, ScheduleStop, StationInfo
 from .states import (
     ChargingState,
     DrivingState,
@@ -32,25 +33,22 @@ class WorldUpdateBehaviour(CyclicBehaviour):
         msg = await self.receive(timeout=5)
         if msg is None:
             return
-        try:
-            data = json.loads(msg.body)
-        except (json.JSONDecodeError, TypeError):
+
+        world_update = self.agent.messaging_service.parse_world_update(msg)
+        if not world_update:
             return
 
-        self.agent.electricity_price = data.get(
-            "electricity_price",
-            data.get("energy_price", self.agent.electricity_price),
-        )
-        self.agent.grid_load = data.get("grid_load", self.agent.grid_load)
-        if "solar_production_rate" in data:
+        if "energy_price" in world_update:
+            self.agent.electricity_price = float(world_update["energy_price"])
+        if "grid_load" in world_update:
             try:
-                self.agent.renewable_available = float(data["solar_production_rate"]) > 0.0
+                self.agent.grid_load = float(world_update["grid_load"])
             except (TypeError, ValueError):
                 pass
-        else:
-            self.agent.renewable_available = data.get(
-                "renewable_available", self.agent.renewable_available
-            )
+        if "solar_production_rate" in world_update:
+            self.agent.renewable_available = float(world_update["solar_production_rate"]) > 0.0
+        if "renewable_available" in world_update:
+            self.agent.renewable_available = bool(world_update["renewable_available"])
 
 
 class EVAgent(Agent):
@@ -58,48 +56,51 @@ class EVAgent(Agent):
         self,
         jid,
         password,
-        ev_config=None,
+        ev_config: dict[str, Any] | EVConfig | None = None,
         *args,
         **kwargs,
     ):
         super().__init__(jid, password, *args, **kwargs)
 
-        config = ev_config or {}
+        if isinstance(ev_config, EVConfig):
+            config = ev_config
+        else:
+            config = EVConfig.from_mapping(ev_config or {})
 
-        self.battery_capacity_kwh = config.get("battery_capacity_kwh", 60.0)
-        self.current_soc = config.get("current_soc", 0.20)
-        self.low_soc_threshold = config.get("low_soc_threshold", 0.20)
-        self.target_soc = config.get("target_soc", 0.80)
+        self.battery_capacity_kwh = config.battery_capacity_kwh
+        self.current_soc = config.current_soc
+        self.low_soc_threshold = config.low_soc_threshold
+        self.target_soc = config.target_soc
 
-        self.departure_time = config.get("departure_time", "08:00")
-        self.arrival_time = config.get("arrival_time", "22:00")
+        self.departure_time = config.departure_time
+        self.arrival_time = config.arrival_time
 
-        self.max_charge_rate_kw = config.get("max_charge_rate_kw", 22.0)
+        self.max_charge_rate_kw = config.max_charge_rate_kw
         self.current_charge_rate_kw = 0.0
 
-        self.x = config.get("x", 0.0)
-        self.y = config.get("y", 0.0)
-        self.velocity = config.get("velocity", 1.0)
-        self.energy_per_km = config.get("energy_per_km", 1)
+        self.x = config.x
+        self.y = config.y
+        self.velocity = config.velocity
+        self.energy_per_km = config.energy_per_km
 
-        self.cs_stations = config.get("cs_stations", [])
+        self.cs_stations: list[StationInfo] = config.cs_stations
         self.current_cs_jid = None
-        self.cs_selection_mode = config.get("cs_selection_mode", "score")
+        self.cs_selection_mode = config.cs_selection_mode
 
-        self.electricity_price = config.get("electricity_price", 0.15)
-        self.grid_load = config.get("grid_load", 0.5)
-        self.renewable_available = config.get("renewable_available", False)
+        self.electricity_price = config.electricity_price
+        self.grid_load = config.grid_load
+        self.renewable_available = config.renewable_available
 
         # Schedule: list of {"name": str, "x": float, "y": float, "hour": float}
-        self.schedule = sorted(
-            config.get("schedule", []),
+        self.schedule: list[ScheduleStop] = sorted(
+            config.schedule,
             key=lambda s: s["hour"],
         )
         self.current_target_index = 0
         self._day_offset = 0  # whole days elapsed since start (for recurring schedule)
         self.current_destination = None  # The destination we're currently heading to
         # WorldAgent JID — set by main.py after construction
-        self.world_jid: str = config.get("world_jid", "")
+        self.world_jid: str = config.world_jid
 
         # Session tracking (used by states for metric reporting)
         self._session_kwh: float = 0.0
@@ -109,7 +110,7 @@ class EVAgent(Agent):
         self.world_clock = None
         self._day_offset = 0  # whole days elapsed since start for daily schedule
 
-    def _default_station_info(self, station_cfg: dict) -> dict:
+    def _default_station_info(self, station_cfg: StationInfo) -> StationInfo:
         return {
             "jid": station_cfg["jid"],
             "x": station_cfg["x"],
@@ -124,7 +125,7 @@ class EVAgent(Agent):
             "estimated_wait_minutes": 0.0,
         }
 
-    async def collect_station_infos(self, state, timeout_seconds: float = 0.3) -> list[dict]:
+    async def collect_station_infos(self, state, timeout_seconds: float = 0.3) -> list[StationInfo]:
         """Query all CSs and return merged station info suitable for scoring."""
         stations = self.cs_stations
         if not stations:
@@ -133,7 +134,7 @@ class EVAgent(Agent):
         for st in stations:
             await self.messaging_service.send_info_query(state, st["jid"])
 
-        responses = {}
+        responses: dict[str, StationInfo] = {}
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline and len(responses) < len(stations):
             msg = await state.receive(timeout=0.05)
@@ -148,23 +149,39 @@ class EVAgent(Agent):
             station_infos.append(responses.get(st["jid"], self._default_station_info(st)))
         return station_infos
 
-    async def commit_to_station(self, state, station_info: dict, assume_on_timeout: bool = True) -> bool:
-        """Send commitment to a specific CS and wait briefly for its ACK."""
-        from .utils import required_energy_kwh, calculate_arrival_time_hours
+    def _required_energy_for_current_trip(self) -> float:
+        from .utils import required_energy_kwh
 
         target_soc = getattr(self, "_trip_target_soc", self.target_soc)
-        required_energy = required_energy_kwh(
+        return required_energy_kwh(
             self.current_soc,
             target_soc,
             self.battery_capacity_kwh,
         )
-        arrival_hours = calculate_arrival_time_hours(
+
+    def _arrival_time_to_station(self, station_info: StationInfo) -> float | None:
+        from .utils import calculate_arrival_time_hours
+
+        return calculate_arrival_time_hours(
             self.x,
             self.y,
             {"x": station_info["x"], "y": station_info["y"]},
             self.velocity,
             self.world_clock,
         )
+
+    async def confirm_cs_proposal(self, state, cs_jid: str, response_data: EVResponse) -> tuple[bool, str]:
+        status = response_data.get("status", "unknown")
+        if status not in ("accept", "wait"):
+            return False, f"Rejected CS proposal: {status}"
+
+        await self.messaging_service.send_proposal_confirm(state, cs_jid, True)
+        return True, f"Accepted CS proposal: {status}"
+
+    async def commit_to_station(self, state, station_info: StationInfo, assume_on_timeout: bool = False) -> bool:
+        """Send commitment to a specific CS and wait briefly for its ACK."""
+        required_energy = self._required_energy_for_current_trip()
+        arrival_hours = self._arrival_time_to_station(station_info)
 
         target_jid = station_info["jid"]
         await self.messaging_service.send_commit(
@@ -190,6 +207,21 @@ class EVAgent(Agent):
 
         return assume_on_timeout
 
+    def _station_candidates(self, station_infos: list[StationInfo]) -> list[StationInfo]:
+        if self.cs_selection_mode == "random":
+            random_candidates = list(station_infos)
+            random.shuffle(random_candidates)
+            return random_candidates
+
+        from .utils import score_charging_station
+
+        scored = []
+        for info in station_infos:
+            score = score_charging_station(self.x, self.y, info)
+            scored.append((score, info))
+        scored.sort(key=lambda item: item[0])
+        return [info for _, info in scored]
+
     async def select_and_commit_cs(self, state) -> str | None:
         """Broadcast CS info request, pick the best CS, and send a commitment.
         Returns the chosen CS JID on success, or None if none available."""
@@ -199,37 +231,11 @@ class EVAgent(Agent):
         name = str(self.jid).split("@")[0]
         t = self.world_clock.formatted_time() if self.world_clock else "??:??"
 
-        if self.cs_selection_mode == "random":
-            station_infos = [self._default_station_info(st) for st in self.cs_stations]
-            random.shuffle(station_infos)
-
-            for info in station_infos:
-                accepted = await self.commit_to_station(state, info)
-                jid = info["jid"]
-                if accepted:
-                    print(f"[{t}][{name}][SELECT] Committed randomly to {jid}")
-                    self.current_cs_jid = jid
-                    return jid
-                print(f"[{t}][{name}][SELECT] Random commit rejected by {jid}, trying next...")
-
-            best_jid = station_infos[0]["jid"]
-            print(f"[{t}][{name}][SELECT] Random mode fallback to {best_jid}.")
-            self.current_cs_jid = best_jid
-            return best_jid
-
         station_infos = await self.collect_station_infos(state)
         if not station_infos:
             return None
 
-        from .utils import score_charging_station
-
-        candidates = []
-        for info in station_infos:
-            score = score_charging_station(self.x, self.y, info)
-            candidates.append((score, info))
-        candidates.sort(key=lambda x: x[0])
-
-        for _, info in candidates:
+        for info in self._station_candidates(station_infos):
             accepted = await self.commit_to_station(state, info)
             jid = info["jid"]
             if accepted:
@@ -238,11 +244,9 @@ class EVAgent(Agent):
                 return jid
             print(f"[{t}][{name}][SELECT] Commit rejected by {jid}, trying next...")
 
-        # All CSs rejected commitment. Fallback: go to best-scoring CS anyway.
-        best_jid = candidates[0][1]["jid"]
-        print(f"[{t}][{name}][SELECT] All CSs rejected. Falling back to {best_jid} (no reservation).")
-        self.current_cs_jid = best_jid
-        return best_jid
+        print(f"[{t}][{name}][SELECT] All CSs rejected commit request.")
+        self.current_cs_jid = None
+        return None
 
     async def reevaluate_cs_after_update(self, state, reason: str = "cs_update") -> None:
         """Cancel the current CS commitment, if any, so the EV can reselect."""

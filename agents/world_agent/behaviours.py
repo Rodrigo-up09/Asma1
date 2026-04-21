@@ -18,37 +18,6 @@ class BroadcastBehaviour(PeriodicBehaviour):
         self._last_heartbeat_at = 0.0
         self._tick_id = 0
 
-    def _build_price_payload(self, agent, state: dict) -> dict:
-        return {
-            "type": self.WORLD_UPDATE_ENERGY_PRICE,
-            "energy_price": state["electricity_price"],
-            "electricity_price": state["electricity_price"],
-            "tick_id": self._tick_id,
-            "timestamp": agent.world_clock.formatted_time(),
-        }
-
-    def _resolve_local_solar(self, agent, hour: float, jid: str, base_solar: float) -> float:
-        cs_pos = agent.cs_positions.get(str(jid))
-        if not cs_pos:
-            return base_solar
-        return agent.world_model.solar_production_at_position(hour, cs_pos["x"], cs_pos["y"])
-
-    def _build_solar_payload(self, agent, jid: str, hour: float, state: dict) -> dict:
-        local_solar = self._resolve_local_solar(
-            agent,
-            hour,
-            jid,
-            state["solar_production_rate"],
-        )
-        return {
-            "type": self.WORLD_UPDATE_SOLAR_RATE,
-            "solar_production_rate": local_solar,
-            "grid_load": state["grid_load"],
-            "renewable_available": local_solar > 0.0,
-            "tick_id": self._tick_id,
-            "timestamp": agent.world_clock.formatted_time(),
-        }
-
     async def run(self) -> None:
         agent = self.agent
         hour = agent.world_clock.current_hour()
@@ -65,10 +34,13 @@ class BroadcastBehaviour(PeriodicBehaviour):
         if not (send_price or send_solar):
             return
 
-        price_payload = self._build_price_payload(agent, state)
+        price_payload = agent.build_price_payload(state)
+        price_payload["tick_id"] = self._tick_id
+        price_payload["timestamp"] = agent.world_clock.formatted_time()
 
         for jid in agent.agent_jids:
-            solar_payload = self._build_solar_payload(agent, str(jid), hour, state)
+            solar_payload = agent.build_solar_payload(str(jid), hour, state, self._tick_id)
+            solar_payload["timestamp"] = agent.world_clock.formatted_time()
             payloads = []
             if send_price:
                 payloads.append(price_payload)
@@ -111,48 +83,7 @@ class StatsListenerBehaviour(CyclicBehaviour):
         except (json.JSONDecodeError, TypeError):
             return
 
-        agent = self.agent
-        event = data.get("event", "")
-
-        if event == "energy_used":
-            kwh = float(data.get("kwh", 0.0))
-            agent.total_energy_consumed += kwh
-            agent.daily_energy_consumed += kwh
-
-        elif event == "charging_complete":
-            kwh = float(data.get("kwh", 0.0))
-            cost = float(data.get("cost", 0.0))
-            used_renewable = bool(data.get("renewable", False))
-
-            agent.total_energy_consumed += kwh
-            agent.total_charging_cost += cost
-            agent.total_charging_sessions += 1
-            agent.daily_energy_consumed += kwh
-            agent.daily_charging_cost += cost
-            agent.daily_charging_sessions += 1
-
-            if used_renewable:
-                agent.renewable_sessions += 1
-                agent.daily_renewable_sessions += 1
-
-        elif event == "waiting_time":
-            minutes = float(data.get("minutes", 0.0))
-            agent.total_waiting_time += minutes
-            agent.waiting_time_events += 1
-            agent.daily_waiting_time += minutes
-            agent.daily_waiting_events += 1
-
-        elif event == "missed_spot":
-            agent.total_missed_spots += 1
-            agent.daily_missed_spots += 1
-
-        elif event == "load_update":
-            current_load = float(data.get("current_load", 0.0))
-            agent.current_load = current_load
-            if current_load > agent.peak_load:
-                agent.peak_load = current_load
-            if current_load > agent.daily_peak_load:
-                agent.daily_peak_load = current_load
+        self.agent.record_metric_event(data)
 
 
 class DailyMetricsLoggerBehaviour(PeriodicBehaviour):
@@ -170,7 +101,7 @@ class DailyMetricsLoggerBehaviour(PeriodicBehaviour):
         agent = self.agent
         current_hour = agent.world_clock.current_hour()
 
-        if self._last_hour is not None and current_hour < self._last_hour:
+        if agent.should_roll_daily_metrics(self._last_hour, current_hour):
             self._completed_days += 1
             agent.metrics_log_writer.write_daily_metrics(
                 day_number=self._completed_days,

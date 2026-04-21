@@ -1,5 +1,57 @@
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, NotRequired, TypedDict
+
+
+DecisionType = Literal["accept", "wait"]
+WorldUpdateType = Literal["energy-price-update", "solar-production-rate-update"]
+
+
+class ChargingRequest(TypedDict):
+    ev_jid: str
+    required_energy: float
+    max_charging_rate: float
+    arriving_hours: NotRequired[float]
+
+
+class PendingProposal(TypedDict):
+    request: ChargingRequest
+    decision: DecisionType
+    reserves_slot: bool
+    created_at: float
+    expires_at: float
+
+
+class IncomingRequest(TypedDict):
+    arriving_hours: float
+    required_energy: float
+    max_charging_rate: float
+
+
+class ActiveChargingSession(TypedDict):
+    required_energy: float
+    rate: float
+    price: float
+
+
+class StationSnapshot(TypedDict):
+    jid: str
+    used_doors: int
+    expected_evs: int
+    num_doors: int
+    electricity_price: float
+    actual_solar_capacity: float
+    max_solar_capacity: float
+    solar_production_rate: float
+    x: float
+    y: float
+
+
+class WorldUpdatePayload(TypedDict):
+    type: WorldUpdateType
+    energy_price: NotRequired[float]
+    solar_production_rate: NotRequired[float]
+    grid_load: NotRequired[float]
+    renewable_available: NotRequired[bool]
 
 
 @dataclass
@@ -18,9 +70,7 @@ class CSConfig:
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "CSConfig":
         return cls(
-            max_charging_rate=float(
-                data.get("max_charging_rate", data.get("max_power_kw", cls.max_charging_rate))
-            ),
+            max_charging_rate=float(data.get("max_charging_rate", cls.max_charging_rate)),
             num_doors=int(data.get("num_doors", cls.num_doors)),
             max_solar_capacity=float(data.get("max_solar_capacity", cls.max_solar_capacity)),
             actual_solar_capacity=float(data.get("actual_solar_capacity", cls.actual_solar_capacity)),

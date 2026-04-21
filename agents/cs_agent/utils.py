@@ -1,6 +1,8 @@
 
 import time
-from typing import Any, Dict, Iterable, List
+from typing import Iterable
+
+from .models import ChargingRequest, IncomingRequest, PendingProposal
 
 
 DEFAULT_PROPOSAL_TTL_SECONDS = 3.0
@@ -14,7 +16,7 @@ def charging_time_minutes(required_energy_kwh, ev_rate_kw, cs_rate_kw):
     return (required_energy / effective_rate) * 60.0
 
 
-def _proposal_is_expired(proposal: Dict[str, Any], now_monotonic: float) -> bool:
+def _proposal_is_expired(proposal: PendingProposal, now_monotonic: float) -> bool:
     expires_at = proposal.get("expires_at")
     if expires_at is None:
         return False
@@ -22,16 +24,16 @@ def _proposal_is_expired(proposal: Dict[str, Any], now_monotonic: float) -> bool
 
 
 def _iter_active_pending_proposals(
-    pending_proposals: Dict[str, Dict[str, Any]],
+    pending_proposals: dict[str, PendingProposal],
     now_monotonic: float,
-) -> Iterable[Dict[str, Any]]:
+) -> Iterable[PendingProposal]:
     for proposal in pending_proposals.values():
         if not _proposal_is_expired(proposal, now_monotonic):
             yield proposal
 
 
 def count_pending_slot_reservations(
-    pending_proposals: Dict[str, Dict[str, Any]],
+    pending_proposals: dict[str, PendingProposal],
     now_monotonic: float | None = None,
 ) -> int:
     """Count active pending proposals that reserve a charging slot."""
@@ -44,12 +46,12 @@ def count_pending_slot_reservations(
 
 
 def cleanup_expired_pending_proposals(
-    pending_proposals: Dict[str, Dict[str, Any]],
+    pending_proposals: dict[str, PendingProposal],
     now_monotonic: float | None = None,
-) -> List[str]:
+) -> list[str]:
     """Remove expired pending proposals and return removed EV JIDs."""
     now_value = time.monotonic() if now_monotonic is None else now_monotonic
-    expired_ev_jids: List[str] = []
+    expired_ev_jids: list[str] = []
     for ev_jid, proposal in list(pending_proposals.items()):
         if _proposal_is_expired(proposal, now_value):
             expired_ev_jids.append(ev_jid)
@@ -58,9 +60,9 @@ def cleanup_expired_pending_proposals(
 
 
 def store_pending_proposal(
-    pending_proposals: Dict[str, Dict[str, Any]],
+    pending_proposals: dict[str, PendingProposal],
     ev_jid: str,
-    request_data: dict,
+    request_data: ChargingRequest,
     decision: str,
     ttl_seconds: float = DEFAULT_PROPOSAL_TTL_SECONDS,
     now_monotonic: float | None = None,
@@ -83,46 +85,25 @@ def store_pending_proposal(
     }
 
 
-def retrieve_and_remove_proposal(pending_proposals: dict, ev_jid: str) -> dict:
+def retrieve_and_remove_proposal(
+    pending_proposals: dict[str, PendingProposal],
+    ev_jid: str,
+) -> PendingProposal | None:
     """Retrieve and remove a proposal from pending list.
     
     Returns:
         Pending proposal dict or empty dict if not found
     """
-    return pending_proposals.pop(ev_jid, {})
+    return pending_proposals.pop(ev_jid, None)
 
 
-def apply_confirmed_proposal(
+def add_incoming_request(
+    incoming_requests: dict[str, IncomingRequest],
     ev_jid: str,
-    proposal: dict,
-    agent: object,  # CSAgent
-    state: object,  # SPADE State for sending
+    arriving_hours: float,
+    required_energy: float,
+    max_rate: float,
 ) -> None:
-    """Apply a confirmed proposal (register EV in charging or queue).
-    
-    Args:
-        ev_jid: EV identifier
-        proposal: Proposal dict with 'request' and 'decision'
-        agent: CSAgent instance
-        state: SPADE state for sending metrics etc.
-    """
-    decision = proposal.get("decision")
-    request_data = proposal.get("request", {})
-    
-    if decision == "accept":
-        # Register directly for immediate charging
-        agent.active_charging[ev_jid] = {
-            "required_energy": request_data.get("required_energy", 0.0),
-            "rate": request_data.get("max_charging_rate", agent.max_charging_rate),
-            "price": request_data.get("price", 0.0),
-        }
-        agent.used_doors += 1
-    elif decision == "wait":
-        # Register in queue
-        agent.request_queue.enqueue(request_data)
-
-
-def add_incoming_request(incoming_requests: dict, ev_jid: str, arriving_hours: float, required_energy: float, max_rate: float) -> None:
     """Add an EV to the incoming requests list.
     
     Args:
@@ -139,14 +120,14 @@ def add_incoming_request(incoming_requests: dict, ev_jid: str, arriving_hours: f
     }
 
 
-def remove_incoming_request(incoming_requests: dict, ev_jid: str) -> None:
+def remove_incoming_request(incoming_requests: dict[str, IncomingRequest], ev_jid: str) -> None:
     """Remove an EV from incoming requests (when it arrives or cancels)."""
     incoming_requests.pop(ev_jid, None)
 
 
 def _append_request_duration_to_earliest_door(
-    door_available_at: List[float],
-    request: Dict[str, Any],
+    door_available_at: list[float],
+    request: ChargingRequest,
     cs_max_charging_rate: float,
 ) -> None:
     duration = charging_time_minutes(
@@ -159,13 +140,13 @@ def _append_request_duration_to_earliest_door(
 
 
 def _build_pending_reservation_requests(
-    pending_proposals: Dict[str, Dict[str, Any]] | None,
+    pending_proposals: dict[str, PendingProposal] | None,
     now_monotonic: float,
-) -> List[Dict[str, Any]]:
+) -> list[ChargingRequest]:
     if not pending_proposals:
         return []
 
-    pending_requests: List[Dict[str, Any]] = []
+    pending_requests: list[ChargingRequest] = []
     for proposal in _iter_active_pending_proposals(pending_proposals, now_monotonic):
         if not proposal.get("reserves_slot", proposal.get("decision") == "accept"):
             continue
@@ -181,8 +162,8 @@ def _build_pending_reservation_requests(
 
 
 def _build_incoming_requests_for_estimate(
-    incoming_requests: Dict[str, Dict[str, Any]] | None,
-) -> List[Dict[str, Any]]:
+    incoming_requests: dict[str, IncomingRequest] | None,
+) -> list[ChargingRequest]:
     if not incoming_requests:
         return []
     return [
@@ -195,12 +176,12 @@ def _build_incoming_requests_for_estimate(
 
 
 def calculate_wait_time_minutes(
-    active_charging: dict,
-    request_queue: list,
+    active_charging: dict[str, dict[str, float]],
+    request_queue: list[ChargingRequest],
     num_doors: int,
     cs_max_charging_rate: float,
-    pending_proposals: Dict[str, Dict[str, Any]] | None = None,
-    incoming_requests: Dict[str, Dict[str, Any]] | None = None,
+    pending_proposals: dict[str, PendingProposal] | None = None,
+    incoming_requests: dict[str, IncomingRequest] | None = None,
     include_incoming_requests: bool = False,
 ) -> float:
     """Calculate estimated wait time until the first door is available.
