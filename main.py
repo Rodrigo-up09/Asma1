@@ -8,7 +8,13 @@ from agents.ev_agent.utils import set_cs_selection_weights
 from agents.world_agent import WorldAgent
 from environment.world_clock import WorldClock
 from visualization.visualizer import WorldVisualizer
-from scenarios import display_menu, RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
+from scenarios import (
+    display_menu,
+    RandomScenario,
+    RealisticTestScenario,
+    EV_LOW_SOC_THRESHOLD,
+    EV_TARGET_SOC,
+)
 
 # ══════════════════════════════════════════════════════════════════════
 #  ✏️  CHANGE THESE TWO NUMBERS TO SCALE THE SIMULATION
@@ -241,7 +247,7 @@ async def main():
         if selected_scenario.__class__.__name__ == "PriceComparison":
             # Emphasize price in scenario 1 so lowest-price CS is more evident.
             set_cs_selection_weights(distance=0.2, price=1.8, load=0.4)
-        elif selected_scenario.__class__.__name__ == "RandomScenario":
+        elif selected_scenario.__class__.__name__ in ("RandomScenario", "RealisticTestScenario"):
             chosen_mode = _choose_random_cs_eval_mode()
             resolved_mode, weights = _apply_cs_eval_mode(chosen_mode)
             selected_scenario.cs_eval_mode = resolved_mode
@@ -251,7 +257,7 @@ async def main():
 
         # ── Use preset scenario ──────────────────────────────────────
         print(f"\n📋 Loaded scenario: {selected_scenario.name}")
-        if selected_scenario.__class__.__name__ == "RandomScenario":
+        if selected_scenario.__class__.__name__ in ("RandomScenario", "RealisticTestScenario"):
             mode_label = CS_EVAL_MODES[getattr(selected_scenario, "cs_eval_mode", "balanced")]["label"]
             print(f"   CS evaluation mode: {mode_label}")
         print(f"   {selected_scenario.description}\n")
@@ -263,7 +269,7 @@ async def main():
         cs_deployment = _generate_scenario_cs_deployment(selected_scenario)
         cs_stations = _build_active_cs_stations(cs_deployment)
         ev_deployment = _generate_scenario_ev_deployment(selected_scenario, cs_stations)
-        if selected_scenario.__class__.__name__ == "RandomScenario":
+        if selected_scenario.__class__.__name__ in ("RandomScenario", "RealisticTestScenario"):
             scenario_type = f"{selected_scenario.__class__.__name__}_{getattr(selected_scenario, 'cs_eval_mode', 'balanced')}"
         else:
             scenario_type = getattr(selected_scenario, "log_name", selected_scenario.__class__.__name__)

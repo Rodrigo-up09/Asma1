@@ -26,7 +26,7 @@ class GoingToChargerState(State):
 
     async def _move_step(self, cs_pos, agent, clock, time_before, t):
         """Execute one movement step towards CS.
-        
+
         Updates agent position, SoC, and logs metrics.
         """
         # Move one step
@@ -69,9 +69,11 @@ class GoingToChargerState(State):
             },
         )
 
-    async def _handle_charge_request_phase(self, agent, cs_pos, t, target_soc_for_charge):
+    async def _handle_charge_request_phase(
+        self, agent, cs_pos, t, target_soc_for_charge
+    ):
         """Send charge request and wait for response.
-        
+
         Returns:
             response_data: Dict with response from CS, or None if error
         """
@@ -80,7 +82,7 @@ class GoingToChargerState(State):
             f"[{t}][{name}][GOING_TO_CHARGER] Arrived at {agent.current_cs_jid}. "
             "Requesting charge..."
         )
-        
+
         # Calculate arrival time
         arriving_hours = calculate_arrival_time_hours(
             agent.x,
@@ -89,7 +91,7 @@ class GoingToChargerState(State):
             agent.velocity,
             agent.world_clock,
         )
-        
+
         # Send charge request
         await agent.messaging_service.send_charge_request(
             self,
@@ -103,31 +105,44 @@ class GoingToChargerState(State):
             arriving_hours=arriving_hours,
         )
 
-        # Wait for response
-        reply = await self.receive(timeout=10)
-        if not reply:
-            print(
-                f"[{t}][{name}][GOING_TO_CHARGER] Timeout waiting CS response. "
-                "Retrying in 3s..."
-            )
-            await asyncio.sleep(3)
-            return None
+        # Wait for actual response, skipping any stale cs_update broadcasts
+        max_attempts = 10
+        for _ in range(max_attempts):
+            reply = await self.receive(timeout=10)
+            if not reply:
+                print(
+                    f"[{t}][{name}][GOING_TO_CHARGER] Timeout waiting CS response. "
+                    "Retrying in 3s..."
+                )
+                await asyncio.sleep(3)
+                return None
 
-        # Parse response
-        response_data = agent.messaging_service.parse_response(reply)
-        if response_data is None:
-            print(
-                f"[{t}][{name}][GOING_TO_CHARGER] Invalid response format. "
-                "Retrying in 3s..."
-            )
-            await asyncio.sleep(3)
-            return None
-        
-        return response_data
+            response_data = agent.messaging_service.parse_response(reply)
+            if response_data is None:
+                print(
+                    f"[{t}][{name}][GOING_TO_CHARGER] Invalid response format. "
+                    "Retrying in 3s..."
+                )
+                await asyncio.sleep(3)
+                return None
+
+            # Skip cs_update broadcasts — we want the actual accept/wait response
+            if response_data.get("status") == "cs_update":
+                print(
+                    f"[{t}][{name}][GOING_TO_CHARGER] Skipping cs_update while waiting for charge response..."
+                )
+                continue
+
+            return response_data
+
+        # Exhausted attempts — all were cs_updates
+        print(f"[{t}][{name}][GOING_TO_CHARGER] Too many cs_updates. Retrying in 3s...")
+        await asyncio.sleep(3)
+        return None
 
     async def _handle_response_and_transition(self, agent, response_data, t):
         """Process CS response, confirm proposal, and return next state.
-        
+
         Returns:
             next_state: STATE_CHARGING or STATE_WAITING_QUEUE, or STATE_GOING_TO_CHARGER if error
         """
@@ -137,10 +152,15 @@ class GoingToChargerState(State):
 
         status = response_data.get("status")
         if status == "cs_update":
-            await agent.reevaluate_cs_after_update(self, response_data.get("reason", "cs_update"))
-            print(f"[{t}][{name}][GOING_TO_CHARGER] CS update received; reselecting before continuing.")
+            # cs_update during arrival/transition — re-evaluate CS selection
+            await agent.reevaluate_cs_after_update(
+                self, response_data.get("reason", "cs_update")
+            )
+            print(
+                f"[{t}][{name}][GOING_TO_CHARGER] CS update received; reselecting before continuing."
+            )
             return STATE_GOING_TO_CHARGER
-        
+
         # Confirm proposal with CS
         confirmed, decision_msg = await handle_cs_proposal(
             self,
@@ -148,12 +168,12 @@ class GoingToChargerState(State):
             response_data,
             agent.current_cs_jid,
         )
-        
+
         if not confirmed:
             print(f"[{t}][{name}][GOING_TO_CHARGER] {decision_msg}. Retrying in 3s...")
             await asyncio.sleep(3)
             return STATE_GOING_TO_CHARGER
-        
+
         print(f"[{t}][{name}][GOING_TO_CHARGER] {decision_msg}")
 
         status = response_data.get("status")
@@ -224,14 +244,14 @@ class GoingToChargerState(State):
         # ── Phase 2: Arrived — send charge request ──
         # Use trip-specific target SoC if set, otherwise use default target_soc
         target_soc_for_charge = getattr(agent, "_trip_target_soc", agent.target_soc)
-        
+
         response_data = await self._handle_charge_request_phase(
             agent,
             cs_pos,
             t,
             target_soc_for_charge,
         )
-        
+
         if response_data is None:
             # If deadline was missed while waiting, destination and cs_jid were cleared
             # and we should transition to STOPPED. Otherwise, retry GOING_TO_CHARGER.
@@ -240,12 +260,12 @@ class GoingToChargerState(State):
             else:
                 self.set_next_state(STATE_GOING_TO_CHARGER)
             return
-        
+
         # ── Phase 3: Process response and confirm proposal ──
         next_state = await self._handle_response_and_transition(
             agent,
             response_data,
             t,
         )
-        
+
         self.set_next_state(next_state)

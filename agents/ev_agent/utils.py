@@ -1,6 +1,8 @@
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from .states.constants import DRIVE_ENERGY_MULTIPLIER
+
 # ──────────────────────────────────────────────────────────────────
 #  CS Selection Weights (configurable for testing different strategies)
 # ──────────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ def apply_energy_drain(
     Returns:
         Tuple of (new_soc, energy_used_kwh)
     """
-    drain_kw = energy_per_km * velocity
+    drain_kw = energy_per_km * velocity * DRIVE_ENERGY_MULTIPLIER
     energy_used = drain_kw * sim_hours_elapsed
     soc_drop = energy_used / battery_capacity_kwh
     new_soc = max(0.0, current_soc - soc_drop)
@@ -106,7 +108,7 @@ def calculate_energy_consumed(
     Returns:
         Energy consumed in kWh
     """
-    drain_kw = energy_per_km * velocity
+    drain_kw = energy_per_km * velocity * DRIVE_ENERGY_MULTIPLIER
     return drain_kw * sim_hours_elapsed
 
 

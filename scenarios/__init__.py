@@ -8,6 +8,7 @@ from .price_comparison import PriceComparison
 from .cs_availability import CSAvailability
 from .schedule_check import ScheduleCheckScenario
 from .random_scenario import RandomScenario, EV_LOW_SOC_THRESHOLD, EV_TARGET_SOC
+from .realistic_test import RealisticTestScenario
 from .utils import generate_scenario_schedule, generate_hourly_schedule
 
 # Registry of all available scenarios
@@ -16,6 +17,7 @@ SCENARIOS = [
     CSAvailability(),
     ScheduleCheckScenario(),
     RandomScenario(),
+    RealisticTestScenario(),
 ]
 
 
@@ -32,26 +34,28 @@ def display_menu():
     print("ASMA Simulation - Scenario Selection")
     print("=" * 70)
     print("\nAvailable Scenarios:\n")
-    
+
     for i, scenario in enumerate(SCENARIOS):
         print(f"  [{i + 1}] {scenario.name}")
         print(f"      {scenario.description}")
         print()
-    
+
     print(f"  [0] Default Simulation (20 EVs, 3 CS, mixed drivers)")
     print()
-    
+
     while True:
         try:
             choice = input("Select scenario (0-" + str(len(SCENARIOS)) + "): ").strip()
             choice_int = int(choice)
-            
+
             if choice_int == 0:
                 return None  # Default scenario
             elif 1 <= choice_int <= len(SCENARIOS):
                 return SCENARIOS[choice_int - 1]
             else:
-                print(f"Invalid choice. Please enter a number between 0 and {len(SCENARIOS)}.")
+                print(
+                    f"Invalid choice. Please enter a number between 0 and {len(SCENARIOS)}."
+                )
         except ValueError:
             print("Invalid input. Please enter a number.")
 
@@ -62,6 +66,7 @@ __all__ = [
     "CSAvailability",
     "ScheduleCheckScenario",
     "RandomScenario",
+    "RealisticTestScenario",
     "SCENARIOS",
     "get_scenario_by_index",
     "display_menu",

@@ -1,4 +1,5 @@
 import asyncio
+import math
 
 from spade.behaviour import State
 
@@ -46,16 +47,56 @@ class ChargingState(State):
         # Accumulate kWh for this session
         agent._session_kwh = getattr(agent, "_session_kwh", 0.0) + energy_added
 
-        # Use trip-specific target SoC if set, otherwise use default target_soc
-        target_soc_for_charge = getattr(agent, "_trip_target_soc", agent.target_soc)
+        # Use trip-specific target SoC if set, otherwise aim for 100%
+        target_soc_for_charge = getattr(agent, "_trip_target_soc", 1.0)
+
+        # ── Check if we must leave early due to upcoming deadline ─────
+        must_leave_early = False
+        if (
+            agent.current_destination
+            and agent.current_soc >= agent.low_soc_threshold + 0.05
+        ):
+            dest = agent.current_destination
+            dest_hour = dest.get("hour", None)
+
+            if dest_hour is not None:
+                dist_to_dest = math.hypot(dest["x"] - agent.x, dest["y"] - agent.y)
+
+                # Estimate travel time properly: (dist / velocity) gives num_ticks,
+                # multiply by tick_sim_hours to get sim-hours.
+                if agent.velocity > 0 and tick_sim_hours > 0:
+                    travel_hours = (dist_to_dest / agent.velocity) * tick_sim_hours
+                else:
+                    travel_hours = 0.0
+
+                # dest_hour is already day-offset-adjusted (set by next_target())
+                # Use sim_hours for apples-to-apples comparison
+                time_remaining = dest_hour - clock.sim_hours
+                time_after_travel = time_remaining - travel_hours
+
+                # Only consider early departure if deadline is actually in the future.
+                # If time_remaining <= 0, the deadline already passed (stale from
+                # a previous day/cycle), so just keep charging to full.
+                if (
+                    time_remaining > 0
+                    and time_after_travel <= 0.25
+                    and agent.current_soc < target_soc_for_charge - 0.05
+                ):
+                    must_leave_early = True
+                    print(
+                        f"[{t}][{name}][CHARGING] ⏰ Must leave now for \"{dest['name']}\"! "
+                        f"SoC: {agent.current_soc:.0%} (wanted {target_soc_for_charge:.0%} "
+                        f"but only {time_remaining:.1f}h until deadline, {travel_hours:.1f}h travel needed)"
+                    )
 
         print(
             f"[{t}][{name}][CHARGING] SoC: {agent.current_soc:.0%} "
             f"(+{energy_added:.1f} kWh) | Target: {target_soc_for_charge:.0%}"
         )
 
-        if agent.current_soc >= target_soc_for_charge - 0.05:
-            print(f"[{t}][{name}][CHARGING] Charged to target! Resuming driving.")
+        if agent.current_soc >= target_soc_for_charge - 0.05 or must_leave_early:
+            if not must_leave_early:
+                print(f"[{t}][{name}][CHARGING] Charged to target! Resuming driving.")
 
             # ── metric: charging session complete ──
             session_kwh = agent._session_kwh
@@ -71,7 +112,7 @@ class ChargingState(State):
                 },
             )
             agent._session_kwh = 0.0
-            
+
             # Clear trip-specific target SoC
             if hasattr(agent, "_trip_target_soc"):
                 delattr(agent, "_trip_target_soc")

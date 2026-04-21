@@ -5,6 +5,7 @@ from spade.behaviour import State
 
 from ..utils import move_towards
 from .constants import (
+    DRIVE_ENERGY_MULTIPLIER,
     STATE_DRIVING,
     STATE_GOING_TO_CHARGER,
     STATE_STOPPED,
@@ -50,7 +51,7 @@ class DrivingState(State):
                 time_after = clock.sim_hours
                 tick_sim_hours = time_after - time_before
 
-                drain_kw = agent.energy_per_km * agent.velocity
+                drain_kw = agent.energy_per_km * agent.velocity * DRIVE_ENERGY_MULTIPLIER
                 energy_used = drain_kw * tick_sim_hours
                 soc_drop = energy_used / agent.battery_capacity_kwh
 
@@ -96,13 +97,15 @@ class DrivingState(State):
                 target_hour = target.get("hour")
                 if target_hour is not None:
                     current_hour = clock.sim_hours
-                    if current_hour > target_hour:
+                    late_by = current_hour - target_hour
+                    # 15-minute tolerance — only count as missed if > 0.25 sim-hours late
+                    if late_by > 0.25:
                         await send_stat(
                             self,
                             getattr(agent, "world_jid", None),
                             {
                                 "event": "missed_spot",
-                                "late_by_hours": round(current_hour - target_hour, 3),
+                                "late_by_hours": round(late_by, 3),
                             },
                         )
                 print(
@@ -122,7 +125,9 @@ class DrivingState(State):
                 )
             else:
                 # No schedule available — stay stopped
-                print(f"[{t}][{name}][DRIVING] No destination or schedule available, going to STOPPED")
+                print(
+                    f"[{t}][{name}][DRIVING] No destination or schedule available, going to STOPPED"
+                )
                 self.set_next_state(STATE_STOPPED)
                 return
 

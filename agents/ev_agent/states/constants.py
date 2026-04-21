@@ -18,6 +18,7 @@ STATE_STOPPED = "STOPPED"
 TICK_SLEEP_SECONDS = 0.1  # real-time delay between ticks
 
 DRIVE_DRAIN_KW = 7.5  # energy consumption while moving
+DRIVE_ENERGY_MULTIPLIER = 1.3  # global multiplier for travel energy use
 
 
 # ── Metrics helper ─────────────────────────────
