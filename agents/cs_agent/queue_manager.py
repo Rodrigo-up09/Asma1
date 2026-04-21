@@ -1,4 +1,6 @@
-from typing import Any, Callable, Dict, List
+from typing import Any, Awaitable, Callable
+
+from .models import ChargingRequest
 
 
 class CSRequestQueue:
@@ -8,9 +10,9 @@ class CSRequestQueue:
     """
 
     def __init__(self) -> None:
-        self._items: List[Dict[str, Any]] = []
+        self._items: list[ChargingRequest] = []
 
-    def enqueue(self, request: Dict[str, Any]) -> None:
+    def enqueue(self, request: ChargingRequest) -> None:
         """Insert request in FIFO queue.
 
         Raises ValueError if the EV is already queued.
@@ -40,15 +42,15 @@ class CSRequestQueue:
     def __len__(self) -> int:
         return len(self._items)
 
-    def snapshot(self) -> List[Dict[str, Any]]:
+    def snapshot(self) -> list[ChargingRequest]:
         """Return a shallow copy of the current queue in FIFO order."""
         return list(self._items)
 
     async def dispatch_eligible(
         self,
         has_free_door: Callable[[], bool],
-        can_accept_request: Callable[[Dict[str, Any]], bool],
-        accept_request: Callable[[Dict[str, Any]], Any],
+        can_accept_request: Callable[[ChargingRequest], bool],
+        accept_request: Callable[[ChargingRequest], Awaitable[Any]],
     ) -> int:
         """Dispatch queued requests that can be accepted now.
 

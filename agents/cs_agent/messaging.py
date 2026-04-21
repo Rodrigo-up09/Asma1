@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from spade.message import Message
 
+from .models import ChargingRequest, WorldUpdatePayload
+
 
 class CSMessagingService:
     EV_PROTOCOL = "ev-charging"
@@ -11,6 +13,17 @@ class CSMessagingService:
     PROTOCOL = EV_PROTOCOL
     WORLD_UPDATE_ENERGY_PRICE = "energy-price-update"
     WORLD_UPDATE_SOLAR_RATE = "solar-production-rate-update"
+
+    @staticmethod
+    def _sender_bare_jid(msg: Any) -> str:
+        return str(msg.sender).split("/")[0]
+
+    @staticmethod
+    def _parse_json_body(msg: Any) -> Optional[dict[str, Any]]:
+        try:
+            return json.loads(msg.body)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
 
     async def send_response(
         self,
@@ -45,29 +58,41 @@ class CSMessagingService:
         msg.body = json.dumps(body)
         await state.send(msg)
 
-    def parse_request(self, msg: Any, default_max_charging_rate: float) -> Optional[Dict[str, Any]]:
+    async def send_info_response(
+        self,
+        state: Any,
+        to_jid: str,
+        payload: dict[str, Any],
+    ) -> None:
+        msg = Message(to=str(to_jid))
+        msg.set_metadata("protocol", self.EV_PROTOCOL)
+        msg.set_metadata("performative", "inform")
+        msg.body = json.dumps(payload)
+        await state.send(msg)
+
+    def parse_request(self, msg: Any, default_max_charging_rate: float) -> Optional[ChargingRequest]:
+        data = self._parse_json_body(msg)
+        if data is None:
+            return None
+
         try:
-            data = json.loads(msg.body)
-            result = {
-                "ev_jid": str(msg.sender).split("/")[0],
-                "required_energy": float(data.get("required_energy", 0)),
+            request: ChargingRequest = {
+                "ev_jid": self._sender_bare_jid(msg),
+                "required_energy": float(data.get("required_energy", 0.0)),
                 "max_charging_rate": float(data.get("max_charging_rate", default_max_charging_rate)),
             }
-            # Optional: arriving time (in simulation hours)
             if "arriving_hours" in data:
-                result["arriving_hours"] = float(data["arriving_hours"])
-            return result
-        except (json.JSONDecodeError, ValueError, AttributeError):
+                request["arriving_hours"] = float(data["arriving_hours"])
+            return request
+        except (TypeError, ValueError):
             return None
 
     def parse_inform_status(self, msg: Any) -> Optional[Tuple[str, str]]:
-        try:
-            data = json.loads(msg.body)
-            status = str(data.get("status"))
-            ev_jid = str(msg.sender).split("/")[0]
-            return ev_jid, status
-        except (json.JSONDecodeError, AttributeError, TypeError):
+        data = self._parse_json_body(msg)
+        if data is None:
             return None
+        status = str(data.get("status"))
+        return self._sender_bare_jid(msg), status
 
     def parse_proposal_confirm(self, msg: Any) -> Optional[Tuple[str, bool]]:
         """Parse EV's confirmation of proposal (accept/reject).
@@ -75,55 +100,43 @@ class CSMessagingService:
         Returns:
             Tuple of (ev_jid, accepted) where accepted is True/False, or None if not a confirmation
         """
+        data = self._parse_json_body(msg)
+        if data is None or "accepted" not in data:
+            return None
+        accepted = bool(data.get("accepted", False))
+        return self._sender_bare_jid(msg), accepted
+
+    def _parse_energy_world_update(self, data: WorldUpdatePayload) -> Optional[Dict[str, float]]:
+        value = data.get("energy_price")
+        if value is None:
+            return None
         try:
-            data = json.loads(msg.body)
-            # Only parse if "accepted" field exists (charge-complete has "status" instead)
-            if "accepted" not in data:
-                return None
-            ev_jid = str(msg.sender).split("/")[0]
-            accepted = bool(data.get("accepted", False))
-            return ev_jid, accepted
-        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            return {"energy_price": float(value)}
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_solar_world_update(self, data: WorldUpdatePayload) -> Optional[Dict[str, float]]:
+        value = data.get("solar_production_rate")
+        if value is None:
+            return None
+        try:
+            return {"solar_production_rate": float(value)}
+        except (TypeError, ValueError):
             return None
 
     def parse_world_update(self, msg: Any) -> Optional[Dict[str, float]]:
-        """Parse world inform messages that update CS dynamic parameters."""
-        try:
-            data = json.loads(msg.body)
-        except (json.JSONDecodeError, TypeError, AttributeError):
+        """Parse world updates using explicit message type (no fallback chain)."""
+        raw_data = self._parse_json_body(msg)
+        if raw_data is None:
             return None
+        data: WorldUpdatePayload = raw_data  # runtime validated below
 
         update_type = str(data.get("type", "")).strip().lower()
-
-        if update_type == self.WORLD_UPDATE_ENERGY_PRICE:
-            value = data.get("energy_price")
-            if value is None:
-                return None
-            try:
-                return {"energy_price": float(value)}
-            except (TypeError, ValueError):
-                return None
-
-        if update_type == self.WORLD_UPDATE_SOLAR_RATE:
-            value = data.get("solar_production_rate")
-            if value is None:
-                return None
-            try:
-                return {"solar_production_rate": float(value)}
-            except (TypeError, ValueError):
-                return None
-
-        # Fallback: also accept messages that send the field directly without a type.
-        if "energy_price" in data:
-            try:
-                return {"energy_price": float(data["energy_price"])}
-            except (TypeError, ValueError):
-                return None
-
-        if "solar_production_rate" in data:
-            try:
-                return {"solar_production_rate": float(data["solar_production_rate"])}
-            except (TypeError, ValueError):
-                return None
-
-        return None
+        parsers = {
+            self.WORLD_UPDATE_ENERGY_PRICE: self._parse_energy_world_update,
+            self.WORLD_UPDATE_SOLAR_RATE: self._parse_solar_world_update,
+        }
+        parser = parsers.get(update_type)
+        if parser is None:
+            return None
+        return parser(data)

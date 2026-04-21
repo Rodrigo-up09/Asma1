@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from .models import DailyMetricsSnapshot
+
 
 class ScenarioMetricsLogWriter:
     """Persist world metrics snapshots into scenario-specific log files."""
@@ -16,7 +18,7 @@ class ScenarioMetricsLogWriter:
         cleaned = "".join(ch for ch in str(raw_name) if ch.isalnum() or ch in ("-", "_"))
         return cleaned or "UnknownScenario"
 
-    def write_daily_metrics(self, day_number: int, sim_time: str, metrics: dict) -> None:
+    def write_daily_metrics(self, day_number: int, sim_time: str, metrics: DailyMetricsSnapshot) -> None:
         lines = [
             f"Day {day_number} (closed at sim-time {sim_time})",
             f"  Total Energy Consumed : {metrics['energy_consumed']:.2f} kWh",

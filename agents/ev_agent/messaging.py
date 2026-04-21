@@ -3,9 +3,21 @@ from typing import Any, Dict, Optional
 
 from spade.message import Message
 
+from .models import EVResponse, StationInfo, WorldUpdatePayload
+
 
 class EVMessagingService:
     PROTOCOL = "ev-charging"
+    WORLD_PROTOCOL = "world-update"
+    WORLD_UPDATE_ENERGY_PRICE = "energy-price-update"
+    WORLD_UPDATE_SOLAR_RATE = "solar-production-rate-update"
+
+    @staticmethod
+    def _parse_json_body(msg: Any) -> Optional[dict[str, Any]]:
+        try:
+            return json.loads(msg.body)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
 
     async def send_charge_request(
         self,
@@ -92,25 +104,26 @@ class EVMessagingService:
         await state.send(msg)
 
     def parse_response(self, msg: Any) -> Optional[Dict[str, Any]]:
-        try:
-            return json.loads(msg.body)
-        except (json.JSONDecodeError, TypeError, AttributeError):
+        data = self._parse_json_body(msg)
+        if data is None:
             return None
+        return data
 
     def parse_info_response(
         self, msg: Any
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[StationInfo]:
         """Parse a CS info response.
 
         Returns dict with keys: jid, used_doors, expected_evs, num_doors,
         electricity_price, x, y.
         """
+        data = self._parse_json_body(msg)
+        if data is None or data.get("type") != "cs_info_response":
+            return None
+
         try:
-            data = json.loads(msg.body)
-            if data.get("type") != "cs_info_response":
-                return None
             return {
-                "jid": data.get("jid", ""),
+                "jid": str(data.get("jid", "")),
                 "used_doors": int(data.get("used_doors", 0)),
                 "expected_evs": int(data.get("expected_evs", 0)),
                 "num_doors": int(data.get("num_doors", 1)),
@@ -122,5 +135,46 @@ class EVMessagingService:
                 "x": float(data.get("x", 0.0)),
                 "y": float(data.get("y", 0.0)),
             }
-        except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        except (TypeError, ValueError):
             return None
+
+    def _parse_energy_world_update(self, data: WorldUpdatePayload) -> Optional[dict[str, float]]:
+        value = data.get("energy_price")
+        if value is None:
+            return None
+        try:
+            return {"energy_price": float(value)}
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_solar_world_update(self, data: WorldUpdatePayload) -> Optional[dict[str, float | bool]]:
+        solar_value = data.get("solar_production_rate")
+        if solar_value is None:
+            return None
+        result: dict[str, float | bool] = {}
+        try:
+            result["solar_production_rate"] = float(solar_value)
+        except (TypeError, ValueError):
+            return None
+
+        if "grid_load" in data:
+            try:
+                result["grid_load"] = float(data["grid_load"])
+            except (TypeError, ValueError):
+                pass
+        if "renewable_available" in data:
+            result["renewable_available"] = bool(data["renewable_available"])
+        return result
+
+    def parse_world_update(self, msg: Any) -> Optional[dict[str, float | bool]]:
+        raw_data = self._parse_json_body(msg)
+        if raw_data is None:
+            return None
+        data: WorldUpdatePayload = raw_data
+        update_type = str(data.get("type", "")).strip().lower()
+
+        if update_type == self.WORLD_UPDATE_ENERGY_PRICE:
+            return self._parse_energy_world_update(data)
+        if update_type == self.WORLD_UPDATE_SOLAR_RATE:
+            return self._parse_solar_world_update(data)
+        return None

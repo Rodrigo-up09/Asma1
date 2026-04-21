@@ -131,46 +131,6 @@ def update_soc_after_travel(
     return max(0.0, current_soc - soc_drop)
 
 
-async def handle_cs_proposal(
-    state: Any,
-    agent: Any,
-    response_data: Dict[str, Any],
-    cs_jid: str,
-) -> Optional[Tuple[bool, str]]:
-    """Process and confirm CS proposal (accept/wait).
-
-    Args:
-        state: SPADE state
-        agent: EV agent
-        response_data: Parsed response from CS
-        cs_jid: Charging station JID
-
-    Returns:
-        Tuple of (confirmed, decision_msg) where:
-        - confirmed: True if proposal was accepted
-        - decision_msg: Human-readable message about the decision
-    """
-    status = response_data.get("status", "unknown")
-
-    # Decide whether to accept the proposal
-    if status in ("accept", "wait"):
-        # Always accept for now (in future: could add logic to reject)
-        accepted = True
-        decision_msg = f"Accepted CS proposal: {status}"
-    else:
-        accepted = False
-        decision_msg = f"Rejected CS proposal: {status}"
-
-    # Send confirmation to CS
-    await agent.messaging_service.send_proposal_confirm(
-        state,
-        cs_jid,
-        accepted,
-    )
-
-    return accepted, decision_msg
-
-
 def score_charging_station(
     ev_x: float,
     ev_y: float,
@@ -202,7 +162,7 @@ def score_charging_station(
     
     # Load component (0.0 to 1.0, where 1.0 = completely full)
     used_doors = station.get("used_doors", 0)
-    expected_evs = station.get("expected_evs", station.get("reserved_doors", 0))
+    expected_evs = station.get("expected_evs", 0)
     num_doors = station.get("num_doors", 1)
     load_factor = (used_doors + (0.5 * expected_evs)) / num_doors if num_doors > 0 else 1.0
     
