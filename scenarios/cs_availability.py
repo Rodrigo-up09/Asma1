@@ -42,7 +42,7 @@ class CSAvailability(Scenario):
                 "password": "password",
                 "config": CSConfig(
                     num_doors=1,  # LIMITED - only 1 door, will fill up quickly
-                    max_charging_rate=10.0,
+                    max_charging_rate=18.0,
                     max_solar_capacity=100.0,
                     actual_solar_capacity=80.0,
                     energy_price=0.15,

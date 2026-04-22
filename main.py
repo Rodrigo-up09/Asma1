@@ -245,8 +245,9 @@ async def main():
     if selected_scenario:
         # Scenario-specific strategy tuning
         if selected_scenario.__class__.__name__ == "PriceComparison":
-            # Emphasize price in scenario 1 so lowest-price CS is more evident.
-            set_cs_selection_weights(distance=0.2, price=1.8, load=0.4)
+            # Favor price strongly, but keep meaningful distance fallback when
+            # stations have similar effective price (e.g., low/no solar).
+            set_cs_selection_weights(distance=0.02, price=1.8, load=0.05)
         elif selected_scenario.__class__.__name__ in ("RandomScenario", "RealisticTestScenario"):
             chosen_mode = _choose_random_cs_eval_mode()
             resolved_mode, weights = _apply_cs_eval_mode(chosen_mode)

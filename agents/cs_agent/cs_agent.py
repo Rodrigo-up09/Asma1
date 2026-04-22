@@ -102,7 +102,7 @@ class CSAgent(Agent):
 
     def build_station_snapshot(self) -> StationSnapshot:
         return {
-            "jid": str(self.jid).split("@")[0],
+            "jid": str(self.jid).split("/")[0],
             "used_doors": self.used_doors,
             "expected_evs": len(self.expected_evs),
             "num_doors": self.num_doors,
