@@ -139,6 +139,29 @@ def _append_request_duration_to_earliest_door(
     door_available_at[next_door] += duration
 
 
+def _wait_for_target_request(
+    door_available_at: list[float],
+    requests: list[ChargingRequest],
+    cs_max_charging_rate: float,
+    target_ev_jid: str,
+) -> float | None:
+    """Return wait time (minutes) until target EV can start charging.
+
+    Requests are processed in FIFO order and assigned to the earliest free door,
+    matching queue dispatch behavior.
+    """
+    for request in requests:
+        next_door = min(range(len(door_available_at)), key=lambda idx: door_available_at[idx])
+        if request.get("ev_jid") == target_ev_jid:
+            return door_available_at[next_door]
+        _append_request_duration_to_earliest_door(
+            door_available_at,
+            request,
+            cs_max_charging_rate,
+        )
+    return None
+
+
 def _build_pending_reservation_requests(
     pending_proposals: dict[str, PendingProposal] | None,
     now_monotonic: float,
@@ -183,6 +206,8 @@ def calculate_wait_time_minutes(
     pending_proposals: dict[str, PendingProposal] | None = None,
     incoming_requests: dict[str, IncomingRequest] | None = None,
     include_incoming_requests: bool = False,
+    target_ev_jid: str | None = None,
+    assumed_request: ChargingRequest | None = None,
 ) -> float:
     """Calculate estimated wait time until the first door is available.
     
@@ -194,6 +219,8 @@ def calculate_wait_time_minutes(
         pending_proposals: Pending CS proposals; only active "accept" entries reserve slots
         incoming_requests: Incoming, not-yet-confirmed requests (optional)
         include_incoming_requests: Whether incoming requests should affect estimate
+        target_ev_jid: EV JID to estimate wait for, considering queue position
+        assumed_request: Request to append virtually (e.g., proposal not confirmed yet)
         
     Returns:
         Wait time in minutes until a door is free
@@ -212,8 +239,22 @@ def calculate_wait_time_minutes(
         next_door = min(range(doors), key=lambda idx: door_available_at[idx])
         door_available_at[next_door] += duration
 
+    queue_for_estimate = list(request_queue)
+    if assumed_request is not None:
+        queue_for_estimate.append(assumed_request)
+
+    if target_ev_jid:
+        wait_for_target = _wait_for_target_request(
+            door_available_at,
+            queue_for_estimate,
+            cs_max_charging_rate,
+            target_ev_jid,
+        )
+        if wait_for_target is not None:
+            return wait_for_target
+
     # Account for queued requests
-    for request in request_queue:
+    for request in queue_for_estimate:
         _append_request_duration_to_earliest_door(
             door_available_at,
             request,

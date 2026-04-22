@@ -79,13 +79,14 @@ class RealisticTestScenario(Scenario):
         self.spots = LOCATIONS
 
         # ── Charging Stations (only 4 doors total for 10 EVs!) ────────
+        uniform_charge_rate = 28.0
         self.cs_configs = [
             {  # CS1: Centro — 2 doors, moderate
                 "jid": "cs1@localhost",
                 "password": "password",
                 "config": CSConfig(
                     num_doors=2,
-                    max_charging_rate=22.0,
+                    max_charging_rate=uniform_charge_rate,
                     max_solar_capacity=100.0,
                     actual_solar_capacity=60.0,
                     energy_price=0.18,
@@ -94,12 +95,12 @@ class RealisticTestScenario(Scenario):
                     y=2.0,
                 ),
             },
-            {  # CS2: Norte — 1 door, cheap but slow
+            {  # CS2: Norte — 1 door
                 "jid": "cs2@localhost",
                 "password": "password",
                 "config": CSConfig(
                     num_doors=1,
-                    max_charging_rate=7.4,
+                    max_charging_rate=uniform_charge_rate,
                     max_solar_capacity=200.0,
                     actual_solar_capacity=150.0,
                     energy_price=0.10,
@@ -108,12 +109,12 @@ class RealisticTestScenario(Scenario):
                     y=10.0,
                 ),
             },
-            {  # CS3: Sul — 1 door, fast but expensive
+            {  # CS3: Sul — 1 door
                 "jid": "cs3@localhost",
                 "password": "password",
                 "config": CSConfig(
                     num_doors=1,
-                    max_charging_rate=50.0,
+                    max_charging_rate=uniform_charge_rate,
                     max_solar_capacity=80.0,
                     actual_solar_capacity=30.0,
                     energy_price=0.30,
