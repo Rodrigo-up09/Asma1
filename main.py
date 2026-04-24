@@ -74,15 +74,12 @@ def _build_active_cs_stations(cs_deployment, active_cs_agents=None):
     return stations
 
 
-def _collect_active_jids(cs_deployment, ev_deployment) -> list:
-    """Return JIDs of every enabled EV and CS agent."""
+def _collect_active_jids(cs_deployment) -> list:
+    """Return JIDs of every enabled CS agent."""
     jids = []
     for cs in cs_deployment:
         if cs.get("enabled", True):
             jids.append(cs["jid"])
-    for ev in ev_deployment:
-        if ev.get("enabled", True):
-            jids.append(ev["jid"])
     return jids
 
 
@@ -201,7 +198,7 @@ CS_EVAL_MODES = {
     },
     "random": {
         "label": "Aleatório",
-        "description": "Escolhe um dos modos acima ao acaso.",
+        "description": "Modo de avaliação aleatório.A CS é escolhida aleatoriamente entre as disponíveis.",
         "weights": None,
     },
 }
@@ -323,7 +320,7 @@ async def main():
         active_ev_agents.append(ev_agent)
 
     # ── World Agent ──────────────────────────────────────────────────
-    all_agent_jids = _collect_active_jids(cs_deployment, ev_deployment)
+    all_agent_jids = _collect_active_jids(cs_deployment)
     cs_positions = _collect_cs_positions(cs_deployment)
     world_agent = WorldAgent(
         jid=WORLD_JID,

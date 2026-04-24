@@ -176,6 +176,11 @@ class GoingToChargerState(State):
 
         status = response_data.get("status")
         waiting_time = response_data.get("estimated_wait_minutes")
+        if "price" in response_data:
+            try:
+                agent.current_station_price_per_kwh = float(response_data["price"])
+            except (TypeError, ValueError):
+                pass
 
         if status == "accept":
             print(f"[{t}][{name}][GOING_TO_CHARGER] Entering charge session.")

@@ -100,7 +100,9 @@ class ChargingState(State):
 
             # ── metric: charging session complete ──
             session_kwh = agent._session_kwh
-            session_cost = session_kwh * agent.electricity_price
+            session_cost = session_kwh * float(
+                getattr(agent, "current_station_price_per_kwh", agent.electricity_price)
+            )
             await send_stat(
                 self,
                 getattr(agent, "world_jid", None),

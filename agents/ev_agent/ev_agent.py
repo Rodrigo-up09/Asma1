@@ -1,11 +1,9 @@
-import json
 import random
 import time
 
 from typing import Any
 
 from spade.agent import Agent
-from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from .messaging import EVMessagingService
@@ -24,31 +22,6 @@ from .states import (
     STATE_WAITING_QUEUE,
 )
 from .utils import closest_station, get_station_position
-
-
-class WorldUpdateBehaviour(CyclicBehaviour):
-    """Receive world-update broadcasts from the WorldAgent and update local state."""
-
-    async def run(self) -> None:
-        msg = await self.receive(timeout=5)
-        if msg is None:
-            return
-
-        world_update = self.agent.messaging_service.parse_world_update(msg)
-        if not world_update:
-            return
-
-        if "energy_price" in world_update:
-            self.agent.electricity_price = float(world_update["energy_price"])
-        if "grid_load" in world_update:
-            try:
-                self.agent.grid_load = float(world_update["grid_load"])
-            except (TypeError, ValueError):
-                pass
-        if "solar_production_rate" in world_update:
-            self.agent.renewable_available = float(world_update["solar_production_rate"]) > 0.0
-        if "renewable_available" in world_update:
-            self.agent.renewable_available = bool(world_update["renewable_available"])
 
 
 class EVAgent(Agent):
@@ -72,9 +45,6 @@ class EVAgent(Agent):
         self.low_soc_threshold = config.low_soc_threshold
         self.target_soc = config.target_soc
 
-        self.departure_time = config.departure_time
-        self.arrival_time = config.arrival_time
-
         self.max_charge_rate_kw = config.max_charge_rate_kw
         self.current_charge_rate_kw = 0.0
 
@@ -88,8 +58,8 @@ class EVAgent(Agent):
         self.cs_selection_mode = config.cs_selection_mode
 
         self.electricity_price = config.electricity_price
-        self.grid_load = config.grid_load
         self.renewable_available = config.renewable_available
+        self.current_station_price_per_kwh = config.electricity_price
 
         # Schedule: list of {"name": str, "x": float, "y": float, "hour": float}
         self.schedule: list[ScheduleStop] = sorted(
@@ -241,6 +211,9 @@ class EVAgent(Agent):
             if accepted:
                 print(f"[{t}][{name}][SELECT] Committed to {jid}")
                 self.current_cs_jid = jid
+                self.current_station_price_per_kwh = float(
+                    info.get("electricity_price", self.current_station_price_per_kwh)
+                )
                 return jid
             print(f"[{t}][{name}][SELECT] Commit rejected by {jid}, trying next...")
 
@@ -352,7 +325,3 @@ class EVAgent(Agent):
         template.set_metadata("protocol", "ev-charging")
 
         self.add_behaviour(fsm, template)
-
-        world_update_template = Template()
-        world_update_template.set_metadata("protocol", "world-update")
-        self.add_behaviour(WorldUpdateBehaviour(), world_update_template)
