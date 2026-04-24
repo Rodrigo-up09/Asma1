@@ -66,6 +66,9 @@ class EVAgent(Agent):
             config.schedule,
             key=lambda s: s["hour"],
         )
+        self._schedule_uses_absolute_hours = any(
+            float(stop.get("hour", 0.0)) >= 24.0 for stop in self.schedule
+        )
         self.current_target_index = 0
         self._day_offset = 0  # whole days elapsed since start (for recurring schedule)
         self.current_destination = None  # The destination we're currently heading to
@@ -78,7 +81,52 @@ class EVAgent(Agent):
 
         self.messaging_service = EVMessagingService()
         self.world_clock = None
-        self._day_offset = 0  # whole days elapsed since start for daily schedule
+
+    def _initialize_schedule_pointer(self) -> None:
+        """Point to the next scheduled stop that is still in the future."""
+        if not self.schedule:
+            self.current_target_index = 0
+            self._day_offset = 0
+            return
+
+        clock = getattr(self, "world_clock", None)
+        if clock is None:
+            self.current_target_index = 0
+            self._day_offset = 0
+            return
+
+        now = clock.sim_hours
+
+        if self._schedule_uses_absolute_hours:
+            best_idx = 0
+            best_abs_hour = None
+            for idx, stop in enumerate(self.schedule):
+                abs_hour = float(stop["hour"])
+                if abs_hour >= now and (best_abs_hour is None or abs_hour < best_abs_hour):
+                    best_abs_hour = abs_hour
+                    best_idx = idx
+
+            self.current_target_index = best_idx
+            self._day_offset = 0
+            return
+
+        base_day = int(now // 24)
+
+        best_idx = 0
+        best_abs_hour = None
+        for idx, stop in enumerate(self.schedule):
+            abs_hour = float(stop["hour"]) + 24 * base_day
+            if abs_hour < now:
+                abs_hour += 24
+            if best_abs_hour is None or abs_hour < best_abs_hour:
+                best_abs_hour = abs_hour
+                best_idx = idx
+
+        self.current_target_index = best_idx
+        if best_abs_hour is not None:
+            self._day_offset = int(best_abs_hour // 24)
+        else:
+            self._day_offset = base_day
 
     def _default_station_info(self, station_cfg: StationInfo) -> StationInfo:
         return {
@@ -260,6 +308,8 @@ class EVAgent(Agent):
             return None
         stop = self.schedule[self.current_target_index]
         result = stop.copy()
+        if self._schedule_uses_absolute_hours:
+            return result
         # Apply day offset to get absolute hour
         result["hour"] = stop["hour"] + 24 * self._day_offset
         return result
@@ -291,6 +341,9 @@ class EVAgent(Agent):
             f"Max charge rate: {self.max_charge_rate_kw} kW | "
             f"Position: ({self.x}, {self.y})"
         )
+
+        self._initialize_schedule_pointer()
+
         if self.schedule:
             stops = ", ".join(
                 f"{int(s['hour']):02d}:{int((s['hour'] % 1) * 60):02d} → {s['name']}"

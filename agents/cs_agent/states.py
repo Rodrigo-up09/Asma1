@@ -37,8 +37,7 @@ async def _report_load(state: State) -> None:
         for item in agent.request_queue.snapshot()
         if item.get("ev_jid")
     }
-    current_load = len(set(agent.active_charging.keys()) |
-                       queued_evs | set(agent.expected_evs))
+    current_load = len(set(agent.active_charging.keys()) | queued_evs)
     await _send_stat(
         state,
         world_jid,
@@ -78,13 +77,20 @@ class CSStateMixin:
             agent.pending_proposals)
         return (agent.used_doors + reserved_slots) < agent.num_doors
 
-    def _estimate_wait_minutes(self, agent) -> float:
+    def _estimate_wait_minutes(
+        self,
+        agent,
+        target_ev_jid: str | None = None,
+        assumed_request: ChargingRequest | None = None,
+    ) -> float:
         return calculate_wait_time_minutes(
             active_charging=agent.active_charging,
             request_queue=agent.request_queue.snapshot(),
             num_doors=agent.num_doors,
             cs_max_charging_rate=agent.max_charging_rate,
             pending_proposals=agent.pending_proposals,
+            target_ev_jid=target_ev_jid,
+            assumed_request=assumed_request,
         )
 
     def _parse_json_body(self, msg: Message) -> dict[str, Any] | None:
@@ -157,8 +163,16 @@ class CSStateMixin:
     async def _send_proposal(self, agent, ev_jid: str, decision: str) -> None:
         extra: dict[str, Any] = {"price": agent.energy_price}
         if decision == "wait":
+            pending = agent.pending_proposals.get(ev_jid) or {}
+            assumed_request = pending.get("request") if pending else None
             extra["estimated_wait_minutes"] = round(
-                self._estimate_wait_minutes(agent), 2)
+                self._estimate_wait_minutes(
+                    agent,
+                    target_ev_jid=ev_jid,
+                    assumed_request=assumed_request,
+                ),
+                2,
+            )
 
         await agent.messaging_service.send_response(self, ev_jid, decision, extra=extra)
         print(
@@ -175,8 +189,9 @@ class CSStateMixin:
 
         response = agent.build_station_snapshot()
         response["type"] = "cs_info_response"
+        estimate_for_ev = ev_jid if agent.request_queue.contains_ev(ev_jid) else None
         response["estimated_wait_minutes"] = round(
-            self._estimate_wait_minutes(agent), 2)
+            self._estimate_wait_minutes(agent, target_ev_jid=estimate_for_ev), 2)
 
         await agent.messaging_service.send_info_response(self, str(msg.sender), response)
         print(

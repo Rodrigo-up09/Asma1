@@ -86,8 +86,8 @@ class PriceComparison(Scenario):
             home_x, home_y = random.uniform(-12, 12), random.uniform(-12, 12)
 
             # More frequent appointments across the day to force repeated travel/charging.
-            schedule = generate_scenario_schedule(home_x, home_y, self.spots, num_stops=6)
-            frequent_time_slots = [8.0, 10.0, 12.0, 14.0, 16.0, 18.0]
+            schedule = generate_scenario_schedule(home_x, home_y, self.spots, num_stops=9)
+            frequent_time_slots = [8.0, 9.5, 11.0, 12.5, 14.0, 15.5, 17.0, 18.5, 19.5]
             for idx, stop in enumerate(schedule[:-1]):  # keep final home stop at 20:00
                 if idx < len(frequent_time_slots):
                     stop["hour"] = frequent_time_slots[idx]

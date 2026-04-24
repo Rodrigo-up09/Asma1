@@ -91,7 +91,7 @@ class DrivingState(State):
                     old_index = agent.current_target_index
                     agent.current_target_index = (old_index + 1) % len(agent.schedule)
                     # If we wrapped to the first stop, a new day has started
-                    if agent.current_target_index == 0:
+                    if agent.current_target_index == 0 and not getattr(agent, "_schedule_uses_absolute_hours", False):
                         agent._day_offset += 1
 
                 target_hour = target.get("hour")

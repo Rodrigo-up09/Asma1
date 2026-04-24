@@ -25,6 +25,59 @@ This document describes the practical message flow between the EV agent and the 
 6. When charging reaches target, EV sends `charge-complete`.
 7. CS frees one door and tries to dispatch queued EVs.
 
+## Sequence Diagram (Current Code-Accurate Flow)
+
+```mermaid
+sequenceDiagram
+   autonumber
+   participant EV as EV Agent
+   participant CS as CS Agent
+
+   Note over EV,CS: Phase A - Station discovery and commitment
+   EV->>CS: query cs_info_request
+   CS-->>EV: inform cs_info_response (doors, expected_evs, price, wait)
+   EV->>CS: commit ev_commit (required_energy, arriving_hours)
+   CS-->>EV: response commit_accepted
+
+   Note over EV,CS: Phase B - Travel and charge request at arrival
+   EV->>CS: request (required_energy, max_charging_rate, arriving_hours)
+   CS-->>EV: response status=accept OR status=wait
+
+   Note over EV,CS: Phase C - Proposal confirmation handshake
+   EV->>CS: inform proposal_confirmed / proposal_rejected
+
+   alt confirmed accept
+      Note over CS: move EV to active_charging
+      EV->>EV: enter CHARGING state
+   else confirmed wait
+      Note over CS: enqueue EV
+      EV->>EV: enter WAITING_QUEUE state
+   else rejected or expired proposal
+      Note over CS: release pending reservation
+   end
+
+   opt while waiting, better station appears
+      EV->>CS: cancel ev_cancel (old station)
+      EV->>CS: commit ev_commit (new station)
+      CS-->>EV: response commit_accepted
+   end
+
+   alt queue promotion
+      CS-->>EV: response status=accept
+      EV->>EV: transition WAITING_QUEUE -> CHARGING
+   end
+
+   Note over EV,CS: Phase D - Session close
+   EV->>CS: inform charge-complete
+   Note over CS: free door and dispatch eligible queued EVs
+```
+
+### Notes about fidelity
+
+- The CS decision is not final at proposal time; it becomes effective only after EV confirmation.
+- Pending `accept` proposals temporarily reserve slots and expire by TTL if not confirmed.
+- Queue wait estimates are based on active sessions, queue, and pending slot reservations.
+
 ## EV Side Responsibilities
 
 1. Choose target charging station.
